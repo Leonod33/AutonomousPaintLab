@@ -8,6 +8,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from .references import load_reference_manifest
+from .review import ReviewFinding
 from .session import DecisionSummary, PaintRun, VisibleAction
 
 
@@ -22,6 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--seed", type=int, default=0)
     reset.add_argument("--action-budget", type=int, default=100)
     reset.add_argument("--review-budget", type=int, default=3)
+    reset.add_argument(
+        "--references",
+        type=Path,
+        help="attributed references.json prepared before screenshot-only play",
+    )
 
     subparsers.add_parser("capture")
 
@@ -36,6 +43,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     review = subparsers.add_parser("review")
     review.add_argument("--assessment", required=True)
+    review.add_argument(
+        "--finding",
+        action="append",
+        default=[],
+        help="JSON object with area, region, issue, suggestion, priority, and confidence",
+    )
 
     final = subparsers.add_parser("finalize")
     final.add_argument("--fps", type=int, default=3)
@@ -62,6 +75,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             "model_vision",
             arguments.action_budget,
             arguments.review_budget,
+            load_reference_manifest(arguments.references),
         )
         session.app.set_summary(
             phase="MODEL-VISION SCREENSHOT INTERFACE",
@@ -97,7 +111,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             **result,
         }
     if arguments.command == "review":
-        screenshot = session.review(arguments.assessment)
+        findings = tuple(
+            _parse_finding(value, index)
+            for index, value in enumerate(arguments.finding, start=1)
+        )
+        screenshot = session.review(arguments.assessment, findings)
         _save_state(arguments.state_file, session)
         return _observation(session, screenshot)
     if arguments.command == "finalize":
@@ -119,7 +137,20 @@ def _observation(session: PaintRun, screenshot: Path) -> dict[str, Any]:
         "drawing_action_budget": session.action_budget,
         "reviews": session.app.review_checkpoints,
         "review_budget": session.review_budget,
+        "reference_count": len(session.app.references),
+        "visible_review_findings": len(session.app.review_findings),
     }
+
+
+def _parse_finding(value: str, index: int) -> ReviewFinding:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"finding {index} is not valid JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"finding {index} must be a JSON object")
+    payload.setdefault("finding_id", f"R?-{index}")
+    return ReviewFinding.from_dict(payload)
 
 
 def _save_state(path: Path, session: PaintRun) -> None:
@@ -151,4 +182,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

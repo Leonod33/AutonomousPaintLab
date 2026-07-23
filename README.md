@@ -15,6 +15,16 @@ five progressively stricter stages:
 The screenshot interface never returns canvas state. Its agent input is the
 complete application PNG, and its only drawing outputs are visible UI actions.
 
+Reviews are region-specific: numbered boxes identify what needs work, while the
+side panel and `review_report.md` explain the issue, visible evidence, priority,
+confidence, and proposed correction in ordinary language. The report then names
+the finding that triggered revision, links the visible action, records deferred
+ideas, and checks whether changed pixels stayed inside the intended region.
+
+Web or local research images can be prepared as an attributed reference board.
+The agent opens that board through the visible **REFS** control, so references
+remain inside the complete-application screenshot boundary.
+
 ## Quick start
 
 ```bash
@@ -25,13 +35,33 @@ python scripts/run_screenshot_agent.py --prompt "a cheerful robot tending square
 python scripts/screenshot_cli.py --help
 ```
 
+Prepare an attributed reference:
+
+```bash
+python scripts/prepare_references.py \
+  --run-dir runs/model-robot \
+  --title "Friendly robot gardener" \
+  --source-url "https://example.com/source-page" \
+  --image-url "https://example.com/reference.jpg" \
+  --search-query "friendly robot gardening simple shapes" \
+  --note "Use the broad silhouette and gardening pose; invent new colours and details."
+
+python scripts/run_screenshot_agent.py \
+  --run-dir runs/model-robot \
+  --references runs/model-robot/references.json
+```
+
 Generated runs contain the prompt, metadata, action log, complete-application
-screenshots, numbered recording frames, final canvas PNG, GIF, and MP4.
+screenshots, numbered recording frames, final canvas PNG, GIF, MP4, attributed
+references, and a human-readable visual review report.
 
 Example outputs:
 
 - [Lighthouse, seed 23](examples/lighthouse-seed-23.png)
 - [Robot gardener, seed 41](examples/robot-seed-41.png)
+- [Reference board, seed 57](examples/reference-board-seed-57.png)
+- [Annotated review, seed 57](examples/review-overlay-seed-57.png)
+- [Reviewed robot, seed 57](examples/robot-reviewed-seed-57.png)
 
 ## Tests
 

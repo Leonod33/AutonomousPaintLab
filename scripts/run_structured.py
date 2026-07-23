@@ -24,8 +24,19 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--run-dir", type=Path, default=PROJECT / "runs" / "structured-lighthouse")
+    parser.add_argument("--references", type=Path)
     arguments = parser.parse_args()
-    print(json.dumps(run_structured_control(arguments.prompt, arguments.seed, arguments.run_dir), indent=2))
+    print(
+        json.dumps(
+            run_structured_control(
+                arguments.prompt,
+                arguments.seed,
+                arguments.run_dir,
+                reference_manifest=arguments.references,
+            ),
+            indent=2,
+        )
+    )
     return 0
 
 

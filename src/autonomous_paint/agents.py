@@ -7,6 +7,8 @@ from typing import Protocol
 
 from .constants import PALETTE
 from .plans import ArtPlan, PlanAction, make_plan
+from .references import load_reference_manifest
+from .review import ReviewFinding, generate_review_findings
 from .session import DecisionSummary, PaintRun, VisibleAction
 from .vision import (
     LocatedInterface,
@@ -22,6 +24,7 @@ def run_structured_control(
     run_dir: Path,
     action_budget: int = 100,
     review_budget: int = 3,
+    reference_manifest: Path | None = None,
 ) -> dict[str, str]:
     """Apply exact model commands to verify drawing logic; never label as vision."""
     plan = make_plan(prompt, seed)
@@ -34,15 +37,25 @@ def run_structured_control(
         "structured_state",
         action_budget,
         review_budget,
+        load_reference_manifest(reference_manifest),
     )
     run.app.set_summary(phase="STRUCTURED-STATE CONTROL")
     checkpoints = _checkpoint_indices(len(plan.actions), review_budget)
     for index, action in enumerate(plan.actions, start=1):
-        _apply_structured(run, action)
+        screenshot = _apply_structured(run, action)
         if index in checkpoints:
+            checkpoint = checkpoints.index(index) + 1
+            findings = generate_review_findings(
+                screenshot,
+                (20, 136),
+                (760, 600),
+                prompt,
+                checkpoint,
+            )
             run.review(
-                f"Structured checkpoint {checkpoints.index(index) + 1}: "
-                f"{run.app.model.colour_count()} exact canvas colours present."
+                f"Structured checkpoint {checkpoint}: "
+                f"{run.app.model.colour_count()} exact canvas colours present.",
+                findings,
             )
     for action in plan.revision_actions[:3]:
         _apply_structured(run, action)
@@ -58,7 +71,11 @@ class VisibleBridge(Protocol):
         summary: DecisionSummary,
     ) -> tuple[Path, dict[str, object]]: ...
 
-    def review(self, assessment: str) -> Path: ...
+    def review(
+        self,
+        assessment: str,
+        findings: tuple[ReviewFinding, ...],
+    ) -> Path: ...
 
     def finish(self) -> dict[str, str]: ...
 
@@ -77,8 +94,12 @@ class InProcessVisibleBridge:
         result = self.__run.execute(action, summary)
         return Path(str(result["screenshot_path"])), result
 
-    def review(self, assessment: str) -> Path:
-        return self.__run.review(assessment)
+    def review(
+        self,
+        assessment: str,
+        findings: tuple[ReviewFinding, ...],
+    ) -> Path:
+        return self.__run.review(assessment, findings)
 
     def finish(self) -> dict[str, str]:
         return self.__run.finalize()
@@ -105,6 +126,26 @@ class ScreenshotPaintAgent:
         current_colour = ""
         checkpoints = _checkpoint_indices(len(plan.actions), review_budget)
 
+        # Inspect the visible reference board, even when it reports no cards.
+        screenshot, _ = bridge.act(
+            VisibleAction("click", interface.controls["refs"]),
+            DecisionSummary(
+                "Gather visual inspiration before drawing.",
+                "refs",
+                "Open the visible reference board.",
+                "Reference board has not yet been inspected.",
+            ),
+        )
+        screenshot, _ = bridge.act(
+            VisibleAction("click", interface.controls["refs"]),
+            DecisionSummary(
+                "Return to the blank canvas.",
+                "refs",
+                "Close the visible reference board.",
+                "Reference ideas noted without copying a single source.",
+            ),
+        )
+
         for index, planned in enumerate(plan.actions, start=1):
             if planned.tool != current_tool:
                 screenshot, _ = bridge.act(
@@ -123,7 +164,18 @@ class ScreenshotPaintAgent:
                 _summary(planned, assess_canvas(screenshot, interface)),
             )
             if index in checkpoints:
-                screenshot = bridge.review(assess_canvas(screenshot, interface))
+                checkpoint = checkpoints.index(index) + 1
+                findings = generate_review_findings(
+                    screenshot,
+                    interface.canvas_origin,
+                    interface.canvas_size,
+                    prompt,
+                    checkpoint,
+                )
+                screenshot = bridge.review(
+                    assess_canvas(screenshot, interface),
+                    findings,
+                )
 
         # One deliberately bounded revision pass after the third visual review.
         for planned in plan.revision_actions[:3]:
@@ -165,6 +217,7 @@ def run_screenshot_agent(
     run_dir: Path,
     action_budget: int = 100,
     review_budget: int = 3,
+    reference_manifest: Path | None = None,
 ) -> dict[str, str]:
     run = PaintRun(
         run_dir,
@@ -173,6 +226,7 @@ def run_screenshot_agent(
         "deterministic_pixel_vision",
         action_budget,
         review_budget,
+        load_reference_manifest(reference_manifest),
     )
     run.app.set_summary(phase="SCREENSHOT-ONLY PIXEL AGENT")
     initial = run.capture("agent_observation")
@@ -187,7 +241,8 @@ def run_screenshot_agent(
     )
 
 
-def _apply_structured(run: PaintRun, action: PlanAction) -> None:
+def _apply_structured(run: PaintRun, action: PlanAction) -> Path:
+    run.app.set_review_findings(())
     model = run.app.model
     colour = PALETTE[action.colour]
     if action.tool == "fill":
@@ -229,6 +284,7 @@ def _apply_structured(run: PaintRun, action: PlanAction) -> None:
     screenshot = run.capture(f"structured_{run.app.drawing_actions:03d}")
     run.events[-1]["screenshot"] = str(screenshot)
     run._flush_log()
+    return screenshot
 
 
 def _visible_drawing_action(
@@ -259,4 +315,3 @@ def _checkpoint_indices(action_count: int, review_budget: int) -> list[int]:
             for index in range(1, review_budget + 1)
         }
     )
-

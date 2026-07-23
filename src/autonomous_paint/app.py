@@ -35,6 +35,8 @@ from .constants import (
     WINDOW_SIZE,
 )
 from .model import CanvasModel, Point
+from .references import ReferenceCard
+from .review import ReviewFinding
 
 
 @dataclass
@@ -65,6 +67,7 @@ class PaintApplication:
         seed: int = 0,
         action_budget: int = 100,
         review_budget: int = 3,
+        references: tuple[ReferenceCard, ...] = (),
     ) -> None:
         pygame.init()
         pygame.font.init()
@@ -80,6 +83,10 @@ class PaintApplication:
         self.selected_colour = "ink"
         self.brush_size = 8
         self.summary = VisibleSummary()
+        self.references = references
+        self.reference_board_open = False
+        self.review_findings: tuple[ReviewFinding, ...] = ()
+        self._reference_image_cache: dict[str, pygame.Surface | None] = {}
         self.drag_start: Point | None = None
         self.drag_current: Point | None = None
         self._font = pygame.font.Font(None, 24)
@@ -94,7 +101,7 @@ class PaintApplication:
         rects: dict[str, pygame.Rect] = {}
         names = list(TOOLS) + list(UTILITY_CONTROLS)
         for index, name in enumerate(names):
-            rects[name] = pygame.Rect(20 + index * 94, 72, 86, 48)
+            rects[name] = pygame.Rect(20 + index * 84, 72, 76, 48)
         return rects
 
     @staticmethod
@@ -130,6 +137,14 @@ class PaintApplication:
         values.update({key: value for key, value in updates.items() if value is not None})
         self.summary = VisibleSummary(**values)
 
+    def set_review_findings(
+        self,
+        findings: tuple[ReviewFinding, ...] | list[ReviewFinding],
+    ) -> None:
+        self.review_findings = tuple(findings)
+        if findings:
+            self.reference_board_open = False
+
     def click(self, position: Point) -> UIResult:
         for name, rect in self._tool_rects.items():
             if rect.collidepoint(position):
@@ -142,6 +157,10 @@ class PaintApplication:
                 if name == "clear":
                     self.model.clear()
                     return UIResult(True, drawing_applied=True, control=name)
+                if name == "refs":
+                    self.reference_board_open = not self.reference_board_open
+                    self.review_findings = ()
+                    return UIResult(True, control=name)
                 if name == "save":
                     saved = self.model.save(self.output_path)
                     return UIResult(True, control=name, saved_path=str(saved))
@@ -149,7 +168,7 @@ class PaintApplication:
             if rect.collidepoint(position):
                 self.selected_colour = name
                 return UIResult(True, control=f"palette:{name}")
-        if self.canvas_rect.collidepoint(position):
+        if self.canvas_rect.collidepoint(position) and not self.reference_board_open:
             local = self._local(position)
             if self.selected_tool == "fill":
                 self.model.fill(local, PALETTE[self.selected_colour])
@@ -160,7 +179,7 @@ class PaintApplication:
         return UIResult(False)
 
     def drag(self, start: Point, end: Point, steps: int = 12) -> UIResult:
-        if not self.canvas_rect.collidepoint(start):
+        if not self.canvas_rect.collidepoint(start) or self.reference_board_open:
             return UIResult(False)
         clipped_end = (
             min(self.canvas_rect.right - 1, max(self.canvas_rect.left, end[0])),
@@ -243,7 +262,9 @@ class PaintApplication:
 
     def _draw_toolbar(self, surface: pygame.Surface) -> None:
         for name, rect in self._tool_rects.items():
-            selected = name == self.selected_tool
+            selected = name == self.selected_tool or (
+                name == "refs" and self.reference_board_open
+            )
             pygame.draw.rect(surface, PANEL_LIGHT if selected else PANEL, rect, border_radius=7)
             pygame.draw.rect(
                 surface,
@@ -263,6 +284,10 @@ class PaintApplication:
         raw = self.model.image.tobytes()
         canvas_surface = pygame.image.fromstring(raw, self.model.image.size, "RGB")
         surface.blit(canvas_surface, CANVAS_ORIGIN)
+        if self.reference_board_open:
+            self._draw_reference_board(surface)
+        elif self.review_findings:
+            self._draw_review_overlays(surface)
 
     def _draw_side_panel(self, surface: pygame.Surface) -> None:
         panel = pygame.Rect(804, 64, 416, 672)
@@ -284,27 +309,31 @@ class PaintApplication:
             label = self._tiny.render(name.upper(), True, TEXT)
             surface.blit(label, (rect.left, rect.bottom + 5))
 
-        y = 362
-        self._blit_text(surface, "DECISION SUMMARY", (824, y), self._font, ACCENT)
-        y += 34
-        fields = [
-            ("CURRENT GOAL", self.summary.goal),
-            ("SELECTED TOOL", self.summary.tool.upper()),
-            ("INTENDED ACTION", self.summary.intended_action),
-            ("VISUAL ASSESSMENT", self.summary.assessment),
-        ]
-        for heading, value in fields:
-            self._blit_text(surface, heading, (824, y), self._tiny, MUTED)
-            y += 20
-            y = self._wrapped(surface, value, 824, y, 368, self._small, TEXT)
-            y += 13
+        if self.review_findings:
+            self._draw_review_panel(surface)
+        else:
+            y = 362
+            self._blit_text(surface, "DECISION SUMMARY", (824, y), self._font, ACCENT)
+            y += 34
+            fields = [
+                ("CURRENT GOAL", self.summary.goal),
+                ("SELECTED TOOL", self.summary.tool.upper()),
+                ("INTENDED ACTION", self.summary.intended_action),
+                ("VISUAL ASSESSMENT", self.summary.assessment),
+            ]
+            for heading, value in fields:
+                self._blit_text(surface, heading, (824, y), self._tiny, MUTED)
+                y += 20
+                y = self._wrapped(surface, value, 824, y, 368, self._small, TEXT)
+                y += 13
 
         pygame.draw.line(surface, BUTTON_BORDER, (824, 651), (1200, 651), 1)
         counters = (
-            f"DRAWING ACTIONS {self.drawing_actions}/{self.action_budget}    "
-            f"REVIEWS {self.review_checkpoints}/{self.review_budget}"
+            f"ACTIONS {self.drawing_actions}/{self.action_budget}   "
+            f"REVIEWS {self.review_checkpoints}/{self.review_budget}   "
+            f"REFS {len(self.references)}/{self._reference_preview_count()} PREV"
         )
-        self._blit_text(surface, counters, (824, 670), self._small, TEXT)
+        self._blit_text(surface, counters, (824, 670), self._tiny, TEXT)
         input_label = (
             "Agent input: complete application screenshot only"
             if "SCREENSHOT" in self.summary.phase.upper()
@@ -314,6 +343,162 @@ class PaintApplication:
             else "Human input: mouse"
         )
         self._blit_text(surface, input_label, (824, 704), self._tiny, MUTED)
+
+    def _draw_review_overlays(self, surface: pygame.Surface) -> None:
+        overlay = pygame.Surface(CANVAS_SIZE, pygame.SRCALPHA)
+        priority_colours = {
+            "high": (255, 103, 120),
+            "medium": (255, 213, 79),
+            "low": (111, 195, 255),
+        }
+        for index, finding in enumerate(self.review_findings, start=1):
+            x, y, width, height = finding.region
+            rect = pygame.Rect(x, y, width, height).clip(
+                pygame.Rect(0, 0, *CANVAS_SIZE)
+            )
+            colour = priority_colours[finding.priority]
+            pygame.draw.rect(overlay, (*colour, 38), rect)
+            pygame.draw.rect(overlay, (*colour, 255), rect, width=4)
+            badge = pygame.Rect(rect.left + 5, rect.top + 5, 30, 30)
+            pygame.draw.ellipse(overlay, (*colour, 255), badge)
+            pygame.draw.ellipse(overlay, (*BACKGROUND, 255), badge, width=2)
+            number = self._small.render(str(index), True, BACKGROUND)
+            overlay.blit(number, number.get_rect(center=badge.center))
+        surface.blit(overlay, CANVAS_ORIGIN)
+
+    def _draw_review_panel(self, surface: pygame.Surface) -> None:
+        y = 356
+        self._blit_text(surface, "ART DIRECTOR REVIEW", (824, y), self._font, ACCENT)
+        y += 31
+        priority_colours = {
+            "high": (255, 103, 120),
+            "medium": (255, 213, 79),
+            "low": (111, 195, 255),
+        }
+        for index, finding in enumerate(self.review_findings[:2], start=1):
+            colour = priority_colours[finding.priority]
+            heading = (
+                f"{index}  {finding.priority.upper()} • {finding.area} "
+                f"({finding.confidence:.0%})"
+            )
+            self._blit_text(surface, heading, (824, y), self._tiny, colour)
+            y += 19
+            y = self._wrapped(surface, finding.issue, 824, y, 372, self._tiny, TEXT)
+            y += 4
+            self._blit_text(surface, "NEXT", (824, y), self._tiny, MUTED)
+            y += 17
+            y = self._wrapped(
+                surface,
+                finding.suggestion,
+                824,
+                y,
+                372,
+                self._tiny,
+                TEXT,
+            )
+            y += 10
+        if len(self.review_findings) > 2:
+            self._blit_text(
+                surface,
+                f"+ {len(self.review_findings) - 2} more finding(s) in review_report.md",
+                (824, min(y, 632)),
+                self._tiny,
+                MUTED,
+            )
+
+    def _draw_reference_board(self, surface: pygame.Surface) -> None:
+        board = pygame.Surface(CANVAS_SIZE, pygame.SRCALPHA)
+        board.fill((10, 16, 30, 246))
+        board.blit(
+            self._title.render("REFERENCE BOARD", True, ACCENT),
+            (24, 20),
+        )
+        board.blit(
+            self._small.render(
+                "Use for visual research—combine ideas; do not trace.",
+                True,
+                MUTED,
+            ),
+            (25, 55),
+        )
+        if not self.references:
+            message = self._font.render(
+                "No references loaded. Close REFS to return to the canvas.",
+                True,
+                TEXT,
+            )
+            board.blit(message, (40, 150))
+            surface.blit(board, CANVAS_ORIGIN)
+            return
+
+        card_width = 228
+        for index, reference in enumerate(self.references[:3]):
+            x = 18 + index * 247
+            card = pygame.Rect(x, 92, card_width, 470)
+            pygame.draw.rect(board, PANEL_LIGHT, card, border_radius=8)
+            pygame.draw.rect(board, BUTTON_BORDER, card, width=2, border_radius=8)
+            image_rect = pygame.Rect(x + 10, 104, card_width - 20, 205)
+            pygame.draw.rect(board, BACKGROUND, image_rect, border_radius=5)
+            reference_surface = self._reference_surface(reference)
+            if reference_surface is not None:
+                rect = reference_surface.get_rect(center=image_rect.center)
+                board.blit(reference_surface, rect)
+            else:
+                missing = self._tiny.render("PREVIEW UNAVAILABLE", True, MUTED)
+                board.blit(missing, missing.get_rect(center=image_rect.center))
+            y = 318
+            y = self._wrapped(board, reference.title, x + 10, y, card_width - 20, self._small, TEXT)
+            y += 5
+            fields = (
+                ("USE", reference.note, TEXT),
+                ("QUERY", reference.search_query or "Manually supplied", MUTED),
+                ("SOURCE", reference.source_url, ACCENT),
+                (
+                    "RIGHTS",
+                    reference.rights_note
+                    or "Check source terms; use for inspiration only.",
+                    MUTED,
+                ),
+            )
+            for label, value, colour in fields:
+                compact = value if len(value) <= 112 else f"{value[:109]}..."
+                y = self._wrapped(
+                    board,
+                    f"{label}: {compact}",
+                    x + 10,
+                    y,
+                    card_width - 20,
+                    self._tiny,
+                    colour,
+                )
+                y += 4
+        surface.blit(board, CANVAS_ORIGIN)
+
+    def _reference_preview_count(self) -> int:
+        return sum(
+            1
+            for reference in self.references
+            if reference.image_path and Path(reference.image_path).is_file()
+        )
+
+    def _reference_surface(self, reference: ReferenceCard) -> pygame.Surface | None:
+        path = reference.image_path
+        if not path:
+            return None
+        if path in self._reference_image_cache:
+            return self._reference_image_cache[path]
+        try:
+            image = pygame.image.load(path)
+            width, height = image.get_size()
+            scale = min(208 / width, 205 / height)
+            scaled = pygame.transform.smoothscale(
+                image,
+                (max(1, round(width * scale)), max(1, round(height * scale))),
+            )
+        except (pygame.error, OSError, ValueError):
+            scaled = None
+        self._reference_image_cache[path] = scaled
+        return scaled
 
     @staticmethod
     def _blit_text(
@@ -335,7 +520,21 @@ class PaintApplication:
         font: pygame.font.Font,
         colour: tuple[int, int, int],
     ) -> int:
-        words = text.split()
+        words: list[str] = []
+        for word in text.split():
+            if font.size(word)[0] <= width:
+                words.append(word)
+                continue
+            chunk = ""
+            for character in word:
+                candidate = f"{chunk}{character}"
+                if chunk and font.size(candidate)[0] > width:
+                    words.append(chunk)
+                    chunk = character
+                else:
+                    chunk = candidate
+            if chunk:
+                words.append(chunk)
         line = ""
         for word in words:
             candidate = f"{line} {word}".strip()
@@ -364,6 +563,11 @@ class PaintApplication:
             "selected_colour": self.selected_colour,
             "brush_size": self.brush_size,
             "summary": asdict(self.summary),
+            "references": [reference.to_dict() for reference in self.references],
+            "reference_board_open": self.reference_board_open,
+            "review_findings": [
+                finding.to_dict() for finding in self.review_findings
+            ],
         }
 
     @classmethod
@@ -375,6 +579,10 @@ class PaintApplication:
             seed=int(payload["seed"]),
             action_budget=int(payload["action_budget"]),
             review_budget=int(payload["review_budget"]),
+            references=tuple(
+                ReferenceCard.from_dict(value)
+                for value in payload.get("references", [])
+            ),
         )
         app.drawing_actions = int(payload["drawing_actions"])
         app.review_checkpoints = int(payload["review_checkpoints"])
@@ -382,4 +590,9 @@ class PaintApplication:
         app.selected_colour = payload["selected_colour"]
         app.brush_size = int(payload["brush_size"])
         app.summary = VisibleSummary(**payload["summary"])
+        app.reference_board_open = bool(payload.get("reference_board_open", False))
+        app.review_findings = tuple(
+            ReviewFinding.from_dict(value)
+            for value in payload.get("review_findings", [])
+        )
         return app

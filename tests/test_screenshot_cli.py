@@ -33,7 +33,26 @@ class ScreenshotCliTests(unittest.TestCase):
             self.assertNotIn("model", result)
             self.assertNotIn("history", result)
 
+            review_args = build_parser().parse_args(
+                [
+                    "--state-file",
+                    str(base / "private.json"),
+                    "review",
+                    "--assessment",
+                    "The face needs a clearer expression.",
+                    "--finding",
+                    (
+                        '{"area":"Robot face","region":[200,100,180,150],'
+                        '"issue":"The smile is faint.",'
+                        '"suggestion":"Add a warm smile highlight.",'
+                        '"priority":"high","confidence":0.9}'
+                    ),
+                ]
+            )
+            reviewed = run(review_args)
+            self.assertEqual(1, reviewed["visible_review_findings"])
+            self.assertTrue(Path(reviewed["screenshot_path"]).exists())
+
 
 if __name__ == "__main__":
     unittest.main()
-

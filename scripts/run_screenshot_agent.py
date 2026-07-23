@@ -26,6 +26,7 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, default=PROJECT / "runs" / "pixel-robot")
     parser.add_argument("--action-budget", type=int, default=100)
     parser.add_argument("--review-budget", type=int, default=3)
+    parser.add_argument("--references", type=Path)
     arguments = parser.parse_args()
     result = run_screenshot_agent(
         arguments.prompt,
@@ -33,6 +34,7 @@ def main() -> int:
         arguments.run_dir,
         arguments.action_budget,
         arguments.review_budget,
+        arguments.references,
     )
     print(json.dumps(result, indent=2))
     return 0

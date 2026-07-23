@@ -20,7 +20,7 @@ SELECTED = (52, 211, 153)
 BUTTON_BORDER = (73, 88, 116)
 
 TOOLS = ("brush", "line", "rectangle", "ellipse", "fill")
-UTILITY_CONTROLS = ("undo", "clear", "save")
+UTILITY_CONTROLS = ("undo", "clear", "refs", "save")
 
 # These small, visible fiducials let the deterministic screenshot controller
 # find controls from pixels without importing renderer geometry.
@@ -33,6 +33,7 @@ TOOL_MARKERS = OrderedDict(
         ("fill", (80, 230, 170)),
         ("undo", (255, 220, 90)),
         ("clear", (255, 120, 80)),
+        ("refs", (90, 180, 255)),
         ("save", (110, 240, 250)),
     ]
 )
@@ -56,4 +57,3 @@ PALETTE_MARKERS = OrderedDict(
     (name, (31 + index * 17, 250 - index * 13, 118 + index * 11))
     for index, name in enumerate(PALETTE)
 )
-
