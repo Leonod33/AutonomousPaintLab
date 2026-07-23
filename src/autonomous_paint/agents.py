@@ -9,7 +9,7 @@ from .constants import PALETTE
 from .plans import ArtPlan, PlanAction, make_plan
 from .references import load_reference_manifest
 from .review import ReviewFinding, generate_review_findings
-from .session import DecisionSummary, PaintRun, VisibleAction
+from .session import DecisionSummary, PaintRun, VisibleAction, validate_budgets
 from .vision import (
     LocatedInterface,
     assess_canvas,
@@ -25,19 +25,24 @@ def run_structured_control(
     action_budget: int = 100,
     review_budget: int = 3,
     reference_manifest: Path | None = None,
+    revision_budget: int = 3,
 ) -> dict[str, str]:
     """Apply exact model commands to verify drawing logic; never label as vision."""
     plan = make_plan(prompt, seed)
-    if len(plan.actions) + len(plan.revision_actions) > action_budget:
+    validate_budgets(action_budget, review_budget, revision_budget)
+    if review_budget > len(plan.actions):
+        raise ValueError("review budget exceeds the seeded plan's drawing actions")
+    if len(plan.actions) + min(len(plan.revision_actions), revision_budget) > action_budget:
         raise ValueError("plan exceeds drawing action budget")
     run = PaintRun(
         run_dir,
         prompt,
         seed,
         "structured_state",
-        action_budget,
-        review_budget,
-        load_reference_manifest(reference_manifest),
+        action_budget=action_budget,
+        review_budget=review_budget,
+        references=load_reference_manifest(reference_manifest),
+        revision_budget=revision_budget,
     )
     run.app.set_summary(phase="STRUCTURED-STATE CONTROL")
     checkpoints = _checkpoint_indices(len(plan.actions), review_budget)
@@ -57,8 +62,8 @@ def run_structured_control(
                 f"{run.app.model.colour_count()} exact canvas colours present.",
                 findings,
             )
-    for action in plan.revision_actions[:3]:
-        _apply_structured(run, action)
+    for action in plan.revision_actions[:revision_budget]:
+        _apply_structured(run, action, is_revision=True)
     run.app.model.save(run.output_path)
     run.capture("saved")
     return run.finalize()
@@ -117,9 +122,13 @@ class ScreenshotPaintAgent:
         action_budget: int = 100,
         review_budget: int = 3,
         variant_index: int = 0,
+        revision_budget: int = 3,
     ) -> dict[str, str]:
         plan = make_plan(prompt, seed, variant_index)
-        if len(plan.actions) + len(plan.revision_actions) > action_budget:
+        validate_budgets(action_budget, review_budget, revision_budget)
+        if review_budget > len(plan.actions):
+            raise ValueError("review budget exceeds the seeded plan's drawing actions")
+        if len(plan.actions) + min(len(plan.revision_actions), revision_budget) > action_budget:
             raise ValueError("seeded plan exceeds drawing action budget")
         interface = locate_interface(initial_screenshot)
         screenshot = initial_screenshot
@@ -178,8 +187,8 @@ class ScreenshotPaintAgent:
                     findings,
                 )
 
-        # One deliberately bounded revision pass after the third visual review.
-        for planned in plan.revision_actions[:3]:
+        # One deliberately bounded revision pass after the final visual review.
+        for planned in plan.revision_actions[:revision_budget]:
             if planned.tool != current_tool:
                 screenshot, _ = bridge.act(
                     VisibleAction("click", interface.controls[planned.tool]),
@@ -220,16 +229,18 @@ def run_screenshot_agent(
     review_budget: int = 3,
     reference_manifest: Path | None = None,
     variant_index: int = 0,
+    revision_budget: int = 3,
 ) -> dict[str, str]:
     run = PaintRun(
         run_dir,
         prompt,
         seed,
         "deterministic_pixel_vision",
-        action_budget,
-        review_budget,
-        load_reference_manifest(reference_manifest),
-        variant_index,
+        action_budget=action_budget,
+        review_budget=review_budget,
+        references=load_reference_manifest(reference_manifest),
+        variant_index=variant_index,
+        revision_budget=revision_budget,
     )
     run.app.set_summary(phase="SCREENSHOT-ONLY PIXEL AGENT")
     initial = run.capture("agent_observation")
@@ -239,13 +250,23 @@ def run_screenshot_agent(
         seed,
         initial,
         bridge,
-        action_budget,
-        review_budget,
-        variant_index,
+        action_budget=action_budget,
+        review_budget=review_budget,
+        variant_index=variant_index,
+        revision_budget=revision_budget,
     )
 
 
-def _apply_structured(run: PaintRun, action: PlanAction) -> Path:
+def _apply_structured(
+    run: PaintRun,
+    action: PlanAction,
+    *,
+    is_revision: bool = False,
+) -> Path:
+    if run.app.drawing_actions >= run.action_budget:
+        raise RuntimeError("drawing action budget exhausted")
+    if is_revision and run.app.revision_actions >= run.revision_budget:
+        raise RuntimeError("revision action budget exhausted")
     run.app.set_review_findings(())
     model = run.app.model
     colour = PALETTE[action.colour]
@@ -262,6 +283,8 @@ def _apply_structured(run: PaintRun, action: PlanAction) -> Path:
     else:
         raise ValueError(f"unsupported structured tool: {action.tool}")
     run.app.drawing_actions += 1
+    if is_revision:
+        run.app.revision_actions += 1
     run.app.set_summary(
         goal=action.goal,
         tool=action.tool,
@@ -283,6 +306,7 @@ def _apply_structured(run: PaintRun, action: PlanAction) -> Path:
                 "visual_assessment": "Exact canvas command applied for logic verification.",
             },
             "drawing_actions": run.app.drawing_actions,
+            "revision_actions": run.app.revision_actions,
         }
     )
     screenshot = run.capture(f"structured_{run.app.drawing_actions:03d}")

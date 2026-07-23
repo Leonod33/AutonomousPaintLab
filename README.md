@@ -9,7 +9,7 @@ six progressively stricter stages:
 1. Human-operated Paint application.
 2. Structured-state control for verifying drawing primitives.
 3. Deterministic screenshot-only control through visible clicks and drags.
-4. Visual checkpoints with one limited revision pass.
+4. Adjustable visual checkpoints with a separately bounded revision pass.
 5. GIF/MP4 recording with concise, visible decision summaries.
 6. Blind variant tournaments that compare several screenshot-only candidates
    with a prompt-specific visible rubric.
@@ -36,6 +36,34 @@ python scripts/run_structured.py --prompt "a lighthouse during a storm using fou
 python scripts/run_screenshot_agent.py --prompt "a cheerful robot tending square flowers" --seed 41
 python scripts/screenshot_cli.py --help
 ```
+
+## Adjustable detail and revision limits
+
+Every autonomous runner accepts the same three controls:
+
+- `--actions` (or `--action-budget`) caps all drawing actions.
+- `--revisions` (or `--review-budget`) sets the number of visual review
+  checkpoints.
+- `--revision-actions` caps visible drawing corrections after the final
+  checkpoint.
+
+For example, a more detailed three-candidate tournament can reserve 180 drawing
+actions, five reviews, and eight final corrections for each candidate:
+
+```bash
+python scripts/run_tournament.py \
+  --prompt "a cheerful robot tending square flowers" \
+  --seed 57 --candidates 3 \
+  --actions 180 --revisions 5 --revision-actions 8 \
+  --run-dir runs/detailed-robot-tournament
+```
+
+The defaults remain 100 actions, three checkpoints, and three correction
+actions. These are ceilings rather than quotas: a seeded starter plan may finish
+early, while a screenshot-driven model can use the additional headroom for a
+more detailed picture. The chosen values appear in the application, metadata,
+action log, review report, and tournament manifest. Set `--revision-actions 0`
+to review without allowing a correction pass.
 
 Prepare an attributed reference:
 
@@ -66,7 +94,8 @@ python scripts/run_tournament.py \
   --run-dir runs/robot-tournament
 ```
 
-Each candidate receives an isolated action and review budget. The tournament
+Each candidate receives isolated action, review-checkpoint, and correction
+budgets. The tournament
 judge sees only the final complete-application screenshots, brief, and visible
 rubric—not seeds, canvas state, logs, or review reports. It preserves every
 candidate and produces `tournament.json`, `tournament_report.md`,

@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 from .agents import run_screenshot_agent
 from .constants import PALETTE
 from .references import ReferenceCard, load_reference_manifest
+from .session import validate_budgets
 from .vision import locate_interface
 
 
@@ -208,13 +209,15 @@ def run_variant_tournament(
     action_budget: int = 100,
     review_budget: int = 3,
     reference_manifest: Path | None = None,
+    revision_budget: int = 3,
 ) -> dict[str, str]:
     """Create, judge, and preserve a small set of screenshot-only variants."""
+    validate_budgets(action_budget, review_budget, revision_budget)
+    seeds = derive_candidate_seeds(seed, candidate_count)
     if run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(f"tournament directory is not empty: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     rubric = build_rubric(prompt)
-    seeds = derive_candidate_seeds(seed, candidate_count)
     labels = tuple(chr(ord("A") + index) for index in range(candidate_count))
     preserved_manifest = _preserve_references(reference_manifest, run_dir)
     evaluations: list[CandidateEvaluation] = []
@@ -226,10 +229,11 @@ def run_variant_tournament(
             prompt,
             candidate_seed,
             candidate_dir,
-            action_budget,
-            review_budget,
-            preserved_manifest,
-            variant_index,
+            action_budget=action_budget,
+            review_budget=review_budget,
+            reference_manifest=preserved_manifest,
+            variant_index=variant_index,
+            revision_budget=revision_budget,
         )
         final_screenshots = sorted(
             (candidate_dir / "screenshots").glob("*_final.png")
@@ -277,6 +281,9 @@ def run_variant_tournament(
         ranked,
         winner.candidate_id,
         decision,
+        action_budget,
+        review_budget,
+        revision_budget,
     )
     manifest = {
         "prompt": prompt,
@@ -290,6 +297,7 @@ def run_variant_tournament(
         "candidate_count": candidate_count,
         "action_budget_per_candidate": action_budget,
         "review_budget_per_candidate": review_budget,
+        "revision_action_budget_per_candidate": revision_budget,
         "decision_source": "deterministic_complete_application_screenshot_judge",
         "judge_input": "final_complete_application_screenshot_only",
         "blind_labels": list(labels),
@@ -546,6 +554,9 @@ def _write_report(
     ranked: list[CandidateEvaluation],
     winner_id: str,
     decision: str,
+    action_budget: int,
+    review_budget: int,
+    revision_budget: int,
 ) -> Path:
     lines = [
         "# Variant Tournament Report",
@@ -553,6 +564,8 @@ def _write_report(
         f"**Prompt:** {prompt}",
         f"**Base seed:** {base_seed}",
         f"**Candidate seeds:** {', '.join(str(seed) for seed in seeds)}",
+        f"**Per-candidate budgets:** {action_budget} drawing actions; "
+        f"{review_budget} review checkpoints; {revision_budget} correction actions",
         "**Judge input:** final complete-application screenshots only",
         "",
         "Candidate labels were assigned before judging. The scorer did not receive "
@@ -606,7 +619,7 @@ def _write_report(
             "## Preservation",
             "",
             "Every candidate directory retains its prompt, seed metadata, action log, "
-            "three review checkpoints, complete-application screenshots, final PNG, "
+            "configured review checkpoints, complete-application screenshots, final PNG, "
             "GIF, MP4, and review report. `winner.png` is a convenience copy; losing "
             "variants are not deleted.",
             "",

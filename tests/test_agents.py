@@ -57,6 +57,33 @@ class AgentBoundaryTests(unittest.TestCase):
                     summary,
                 )
 
+    def test_revision_action_budget_is_enforced_after_final_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run = PaintRun(
+                Path(directory),
+                "a cheerful robot tending square flowers",
+                41,
+                "model_vision",
+                action_budget=10,
+                review_budget=1,
+                revision_budget=1,
+            )
+            canvas_start = (run.app.canvas_rect.left + 10, run.app.canvas_rect.top + 10)
+            canvas_end = (run.app.canvas_rect.left + 40, run.app.canvas_rect.top + 40)
+            summary = DecisionSummary(
+                "Improve the focal area",
+                "brush",
+                "Add one visible correction",
+                "The focal area needs a stronger mark.",
+            )
+            run.execute(VisibleAction("drag", canvas_start, canvas_end), summary)
+            run.review("The focal detail needs one correction.")
+            run.execute(VisibleAction("drag", canvas_start, canvas_end), summary)
+            self.assertEqual(2, run.app.drawing_actions)
+            self.assertEqual(1, run.app.revision_actions)
+            with self.assertRaisesRegex(RuntimeError, "revision action budget exhausted"):
+                run.execute(VisibleAction("drag", canvas_start, canvas_end), summary)
+
 
 if __name__ == "__main__":
     unittest.main()

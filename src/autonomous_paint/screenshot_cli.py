@@ -22,8 +22,13 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--run-dir", type=Path, required=True)
     reset.add_argument("--prompt", required=True)
     reset.add_argument("--seed", type=int, default=0)
-    reset.add_argument("--action-budget", type=int, default=100)
-    reset.add_argument("--review-budget", type=int, default=3)
+    reset.add_argument(
+        "--action-budget", "--actions", dest="action_budget", type=int, default=100
+    )
+    reset.add_argument(
+        "--review-budget", "--revisions", dest="review_budget", type=int, default=3
+    )
+    reset.add_argument("--revision-actions", dest="revision_budget", type=int, default=3)
     reset.add_argument(
         "--references",
         type=Path,
@@ -64,18 +69,15 @@ def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
 
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if arguments.command == "reset":
-        if arguments.action_budget < 1:
-            raise ValueError("action budget must be positive")
-        if arguments.review_budget < 1:
-            raise ValueError("review budget must be positive")
         session = PaintRun(
             arguments.run_dir,
             arguments.prompt,
             arguments.seed,
             "model_vision",
-            arguments.action_budget,
-            arguments.review_budget,
-            load_reference_manifest(arguments.references),
+            action_budget=arguments.action_budget,
+            review_budget=arguments.review_budget,
+            references=load_reference_manifest(arguments.references),
+            revision_budget=arguments.revision_budget,
         )
         session.app.set_summary(
             phase="MODEL-VISION SCREENSHOT INTERFACE",
@@ -137,6 +139,8 @@ def _observation(session: PaintRun, screenshot: Path) -> dict[str, Any]:
         "drawing_action_budget": session.action_budget,
         "reviews": session.app.review_checkpoints,
         "review_budget": session.review_budget,
+        "revision_actions": session.app.revision_actions,
+        "revision_action_budget": session.revision_budget,
         "reference_count": len(session.app.references),
         "visible_review_findings": len(session.app.review_findings),
     }

@@ -24,6 +24,13 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, default=23)
     parser.add_argument("--run-dir", type=Path, default=PROJECT / "runs" / "structured-lighthouse")
+    parser.add_argument(
+        "--action-budget", "--actions", dest="action_budget", type=int, default=100
+    )
+    parser.add_argument(
+        "--review-budget", "--revisions", dest="review_budget", type=int, default=3
+    )
+    parser.add_argument("--revision-actions", dest="revision_budget", type=int, default=3)
     parser.add_argument("--references", type=Path)
     arguments = parser.parse_args()
     print(
@@ -32,7 +39,10 @@ def main() -> int:
                 arguments.prompt,
                 arguments.seed,
                 arguments.run_dir,
+                action_budget=arguments.action_budget,
+                review_budget=arguments.review_budget,
                 reference_manifest=arguments.references,
+                revision_budget=arguments.revision_budget,
             ),
             indent=2,
         )

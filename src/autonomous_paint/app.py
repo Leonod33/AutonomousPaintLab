@@ -68,7 +68,14 @@ class PaintApplication:
         action_budget: int = 100,
         review_budget: int = 3,
         references: tuple[ReferenceCard, ...] = (),
+        revision_budget: int = 3,
     ) -> None:
+        if action_budget < 1:
+            raise ValueError("action budget must be positive")
+        if review_budget < 1:
+            raise ValueError("review budget must be positive")
+        if revision_budget < 0:
+            raise ValueError("revision action budget cannot be negative")
         pygame.init()
         pygame.font.init()
         self.model = model or CanvasModel(*CANVAS_SIZE)
@@ -77,8 +84,10 @@ class PaintApplication:
         self.seed = seed
         self.action_budget = action_budget
         self.review_budget = review_budget
+        self.revision_budget = revision_budget
         self.drawing_actions = 0
         self.review_checkpoints = 0
+        self.revision_actions = 0
         self.selected_tool = "brush"
         self.selected_colour = "ink"
         self.brush_size = 8
@@ -155,6 +164,8 @@ class PaintApplication:
                 if name == "undo":
                     return UIResult(self.model.undo(), control=name)
                 if name == "clear":
+                    if not self._drawing_budget_available():
+                        return UIResult(False, control="budget")
                     self.model.clear()
                     return UIResult(True, drawing_applied=True, control=name)
                 if name == "refs":
@@ -169,6 +180,8 @@ class PaintApplication:
                 self.selected_colour = name
                 return UIResult(True, control=f"palette:{name}")
         if self.canvas_rect.collidepoint(position) and not self.reference_board_open:
+            if not self._drawing_budget_available():
+                return UIResult(False, control="budget")
             local = self._local(position)
             if self.selected_tool == "fill":
                 self.model.fill(local, PALETTE[self.selected_colour])
@@ -181,6 +194,8 @@ class PaintApplication:
     def drag(self, start: Point, end: Point, steps: int = 12) -> UIResult:
         if not self.canvas_rect.collidepoint(start) or self.reference_board_open:
             return UIResult(False)
+        if not self._drawing_budget_available():
+            return UIResult(False, control="budget")
         clipped_end = (
             min(self.canvas_rect.right - 1, max(self.canvas_rect.left, end[0])),
             min(self.canvas_rect.bottom - 1, max(self.canvas_rect.top, end[1])),
@@ -251,6 +266,14 @@ class PaintApplication:
 
     def _local(self, position: Point) -> Point:
         return position[0] - CANVAS_ORIGIN[0], position[1] - CANVAS_ORIGIN[1]
+
+    def _drawing_budget_available(self) -> bool:
+        if self.drawing_actions >= self.action_budget:
+            return False
+        return not (
+            self.review_checkpoints >= self.review_budget
+            and self.revision_actions >= self.revision_budget
+        )
 
     def _draw_header(self, surface: pygame.Surface) -> None:
         surface.blit(self._title.render("AUTONOMOUS PAINT LAB", True, TEXT), (20, 20))
@@ -330,10 +353,14 @@ class PaintApplication:
         pygame.draw.line(surface, BUTTON_BORDER, (824, 651), (1200, 651), 1)
         counters = (
             f"ACTIONS {self.drawing_actions}/{self.action_budget}   "
-            f"REVIEWS {self.review_checkpoints}/{self.review_budget}   "
+            f"REVIEWS {self.review_checkpoints}/{self.review_budget}"
+        )
+        revision_counters = (
+            f"REVISION ACTIONS {self.revision_actions}/{self.revision_budget}   "
             f"REFS {len(self.references)}/{self._reference_preview_count()} PREV"
         )
-        self._blit_text(surface, counters, (824, 670), self._tiny, TEXT)
+        self._blit_text(surface, counters, (824, 666), self._tiny, TEXT)
+        self._blit_text(surface, revision_counters, (824, 685), self._tiny, TEXT)
         input_label = (
             "Agent input: complete application screenshot only"
             if "SCREENSHOT" in self.summary.phase.upper()
@@ -342,7 +369,7 @@ class PaintApplication:
             if "STRUCTURED" in self.summary.phase.upper()
             else "Human input: mouse"
         )
-        self._blit_text(surface, input_label, (824, 704), self._tiny, MUTED)
+        self._blit_text(surface, input_label, (824, 712), self._tiny, MUTED)
 
     def _draw_review_overlays(self, surface: pygame.Surface) -> None:
         overlay = pygame.Surface(CANVAS_SIZE, pygame.SRCALPHA)
@@ -557,8 +584,10 @@ class PaintApplication:
             "seed": self.seed,
             "action_budget": self.action_budget,
             "review_budget": self.review_budget,
+            "revision_budget": self.revision_budget,
             "drawing_actions": self.drawing_actions,
             "review_checkpoints": self.review_checkpoints,
+            "revision_actions": self.revision_actions,
             "selected_tool": self.selected_tool,
             "selected_colour": self.selected_colour,
             "brush_size": self.brush_size,
@@ -583,9 +612,11 @@ class PaintApplication:
                 ReferenceCard.from_dict(value)
                 for value in payload.get("references", [])
             ),
+            revision_budget=int(payload.get("revision_budget", 3)),
         )
         app.drawing_actions = int(payload["drawing_actions"])
         app.review_checkpoints = int(payload["review_checkpoints"])
+        app.revision_actions = int(payload.get("revision_actions", 0))
         app.selected_tool = payload["selected_tool"]
         app.selected_colour = payload["selected_colour"]
         app.brush_size = int(payload["brush_size"])

@@ -44,13 +44,16 @@ class PaintRun:
         review_budget: int = 3,
         references: tuple[ReferenceCard, ...] = (),
         variant_index: int = 0,
+        revision_budget: int = 3,
     ) -> None:
+        validate_budgets(action_budget, review_budget, revision_budget)
         self.run_dir = run_dir
         self.prompt = prompt
         self.seed = seed
         self.decision_source = decision_source
         self.action_budget = action_budget
         self.review_budget = review_budget
+        self.revision_budget = revision_budget
         self.variant_index = variant_index
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.observation_dir = self.run_dir / "screenshots"
@@ -65,6 +68,7 @@ class PaintRun:
             action_budget=action_budget,
             review_budget=review_budget,
             references=references,
+            revision_budget=revision_budget,
         )
         self._write_static_metadata()
         self.capture("initial")
@@ -84,6 +88,7 @@ class PaintRun:
                 ),
                 "action_budget": self.action_budget,
                 "review_budget": self.review_budget,
+                "revision_budget": self.revision_budget,
                 "reference_count": len(self.app.references),
                 "reference_preview_count": sum(
                     1
@@ -99,8 +104,15 @@ class PaintRun:
         action: VisibleAction,
         summary: DecisionSummary,
     ) -> dict[str, Any]:
-        if self._would_consume_budget(action) and self.app.drawing_actions >= self.action_budget:
+        consumes_budget = self._would_consume_budget(action)
+        is_revision = (
+            consumes_budget
+            and self.app.review_checkpoints >= self.review_budget
+        )
+        if consumes_budget and self.app.drawing_actions >= self.action_budget:
             raise RuntimeError("drawing action budget exhausted")
+        if is_revision and self.app.revision_actions >= self.revision_budget:
+            raise RuntimeError("revision action budget exhausted")
         self.app.set_review_findings(())
         self.app.set_summary(
             goal=summary.goal,
@@ -116,6 +128,8 @@ class PaintRun:
             raise ValueError(f"invalid visible action: {action}")
         if result.drawing_applied:
             self.app.drawing_actions += 1
+            if is_revision:
+                self.app.revision_actions += 1
         event = {
             "sequence": len(self.events),
             "type": "ui_action",
@@ -124,6 +138,7 @@ class PaintRun:
             "result": asdict(result),
             "drawing_actions": self.app.drawing_actions,
             "review_checkpoints": self.app.review_checkpoints,
+            "revision_actions": self.app.revision_actions,
         }
         self.events.append(event)
         screenshot = self.capture(f"action_{len(self.events):03d}")
@@ -137,6 +152,8 @@ class PaintRun:
             "screenshot_path": str(screenshot.resolve()),
             "drawing_actions": self.app.drawing_actions,
             "reviews": self.app.review_checkpoints,
+            "revision_actions": self.app.revision_actions,
+            "revision_action_budget": self.revision_budget,
         }
 
     def review(
@@ -174,6 +191,7 @@ class PaintRun:
                 "findings": [finding.to_dict() for finding in findings],
                 "drawing_actions": self.app.drawing_actions,
                 "review_checkpoints": self.app.review_checkpoints,
+                "revision_actions": self.app.revision_actions,
             }
         )
         screenshot = self.capture(f"review_{self.app.review_checkpoints}")
@@ -215,6 +233,7 @@ class PaintRun:
             "decision_source": self.decision_source,
             "action_budget": self.action_budget,
             "review_budget": self.review_budget,
+            "revision_budget": self.revision_budget,
             "variant_index": self.variant_index,
             "events": self.events,
             "frame_index": self.frame_index,
@@ -230,6 +249,7 @@ class PaintRun:
         run.decision_source = payload["decision_source"]
         run.action_budget = int(payload["action_budget"])
         run.review_budget = int(payload["review_budget"])
+        run.revision_budget = int(payload.get("revision_budget", 3))
         run.variant_index = int(payload.get("variant_index", 0))
         run.observation_dir = run.run_dir / "screenshots"
         run.frame_dir = run.run_dir / "frames"
@@ -315,7 +335,14 @@ class PaintRun:
             if eligible
             else None
         )
-        lines.extend(["## Revision pass", ""])
+        lines.extend(
+            [
+                "## Revision pass",
+                "",
+                f"**Revision actions:** {self.app.revision_actions}/{self.revision_budget}",
+                "",
+            ]
+        )
         if trigger is not None:
             lines.extend(
                 [
@@ -474,3 +501,17 @@ class PaintRun:
             except FileNotFoundError:
                 pass
             raise
+
+
+def validate_budgets(
+    action_budget: int,
+    review_budget: int,
+    revision_budget: int,
+) -> None:
+    """Reject ambiguous or impossible budget values at every entry point."""
+    if action_budget < 1:
+        raise ValueError("action budget must be positive")
+    if review_budget < 1:
+        raise ValueError("review budget must be positive")
+    if revision_budget < 0:
+        raise ValueError("revision action budget cannot be negative")

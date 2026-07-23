@@ -34,6 +34,23 @@ class PaintApplicationTests(unittest.TestCase):
         self.assertTrue(app.click(app._tool_rects["undo"].center).applied)
         self.assertEqual(changed, app.model.image.tobytes())
 
+    def test_budget_configuration_round_trips_with_counters(self) -> None:
+        app = PaintApplication(
+            action_budget=180,
+            review_budget=5,
+            revision_budget=8,
+        )
+        app.drawing_actions = 72
+        app.review_checkpoints = 4
+        app.revision_actions = 6
+        restored = PaintApplication.from_payload(app.to_payload())
+        self.assertEqual(180, restored.action_budget)
+        self.assertEqual(5, restored.review_budget)
+        self.assertEqual(8, restored.revision_budget)
+        self.assertEqual(72, restored.drawing_actions)
+        self.assertEqual(4, restored.review_checkpoints)
+        self.assertEqual(6, restored.revision_actions)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,6 +20,12 @@ class ScreenshotCliTests(unittest.TestCase):
                     "a lighthouse during a storm using four colours",
                     "--seed",
                     "23",
+                    "--actions",
+                    "180",
+                    "--revisions",
+                    "5",
+                    "--revision-actions",
+                    "8",
                 ]
             )
             result = run(args)
@@ -32,6 +38,10 @@ class ScreenshotCliTests(unittest.TestCase):
             self.assertNotIn("canvas", result)
             self.assertNotIn("model", result)
             self.assertNotIn("history", result)
+            self.assertEqual(180, result["drawing_action_budget"])
+            self.assertEqual(5, result["review_budget"])
+            self.assertEqual(8, result["revision_action_budget"])
+            self.assertEqual(0, result["revision_actions"])
 
             review_args = build_parser().parse_args(
                 [
