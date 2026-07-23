@@ -116,8 +116,9 @@ class ScreenshotPaintAgent:
         bridge: VisibleBridge,
         action_budget: int = 100,
         review_budget: int = 3,
+        variant_index: int = 0,
     ) -> dict[str, str]:
-        plan = make_plan(prompt, seed)
+        plan = make_plan(prompt, seed, variant_index)
         if len(plan.actions) + len(plan.revision_actions) > action_budget:
             raise ValueError("seeded plan exceeds drawing action budget")
         interface = locate_interface(initial_screenshot)
@@ -218,6 +219,7 @@ def run_screenshot_agent(
     action_budget: int = 100,
     review_budget: int = 3,
     reference_manifest: Path | None = None,
+    variant_index: int = 0,
 ) -> dict[str, str]:
     run = PaintRun(
         run_dir,
@@ -227,6 +229,7 @@ def run_screenshot_agent(
         action_budget,
         review_budget,
         load_reference_manifest(reference_manifest),
+        variant_index,
     )
     run.app.set_summary(phase="SCREENSHOT-ONLY PIXEL AGENT")
     initial = run.capture("agent_observation")
@@ -238,6 +241,7 @@ def run_screenshot_agent(
         bridge,
         action_budget,
         review_budget,
+        variant_index,
     )
 
 

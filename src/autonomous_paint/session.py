@@ -43,6 +43,7 @@ class PaintRun:
         action_budget: int = 100,
         review_budget: int = 3,
         references: tuple[ReferenceCard, ...] = (),
+        variant_index: int = 0,
     ) -> None:
         self.run_dir = run_dir
         self.prompt = prompt
@@ -50,6 +51,7 @@ class PaintRun:
         self.decision_source = decision_source
         self.action_budget = action_budget
         self.review_budget = review_budget
+        self.variant_index = variant_index
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.observation_dir = self.run_dir / "screenshots"
         self.frame_dir = self.run_dir / "frames"
@@ -88,6 +90,7 @@ class PaintRun:
                     for reference in self.app.references
                     if reference.image_path and Path(reference.image_path).is_file()
                 ),
+                "variant_index": self.variant_index,
             },
         )
 
@@ -212,6 +215,7 @@ class PaintRun:
             "decision_source": self.decision_source,
             "action_budget": self.action_budget,
             "review_budget": self.review_budget,
+            "variant_index": self.variant_index,
             "events": self.events,
             "frame_index": self.frame_index,
             "app": self.app.to_payload(),
@@ -226,6 +230,7 @@ class PaintRun:
         run.decision_source = payload["decision_source"]
         run.action_budget = int(payload["action_budget"])
         run.review_budget = int(payload["review_budget"])
+        run.variant_index = int(payload.get("variant_index", 0))
         run.observation_dir = run.run_dir / "screenshots"
         run.frame_dir = run.run_dir / "frames"
         run.output_path = run.run_dir / "final.png"
