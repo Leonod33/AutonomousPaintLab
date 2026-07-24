@@ -173,6 +173,15 @@ and combined shape modes, eyedropper sampling, custom/recent colour state, an
 expanded natural palette, and a coordinate magnifier. Layers can be selected,
 added, removed, hidden, revealed, and moved through the compositing order.
 
+The **GRADIENT** tool fills the active layer along the direction of a drag,
+interpolating from colour slot **A** to **B**. Select either visible slot and
+then click a palette colour before dragging. **BRUSH_FX** cycles through solid,
+soft, textured, and scattered strokes; every effect is deterministic and
+therefore reproducible from the action log. **SMUDGE** moves and softly blends a
+local patch. **SYMMETRY** mirrors brush strokes across the vertical centre as
+one undoable drawing action. **GUIDES** overlays the rule of thirds, centre
+lines, and diagonals without changing or saving those guide pixels.
+
 The **CURVE** tool creates a persistent quadratic Bézier object. Dragging makes
 a useful bowed curve in one drawing action; three clicks provide explicit
 start, control, and end points. Select **EDIT** and drag an anchor or the yellow
