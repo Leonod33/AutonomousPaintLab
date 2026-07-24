@@ -490,24 +490,25 @@ class CanvasModel:
         self._layers[self.active_layer]["image"] = gradient
 
     def smudge(self, start: Point, end: Point, radius: int = 12) -> None:
-        """Move a softly blurred patch along a short stroke."""
+        """Blend pixels along a stroke while preserving the surrounding image."""
         self._remember()
         layer = self._active_image()
         x1, y1 = self._point(start)
         x2, y2 = self._point(end)
-        box = (
-            max(0, x1 - radius),
-            max(0, y1 - radius),
-            min(self.width, x1 + radius + 1),
-            min(self.height, y1 + radius + 1),
-        )
-        patch = layer.crop(box).filter(ImageFilter.GaussianBlur(max(1, radius // 3)))
-        layer.alpha_composite(
-            patch,
-            (
-                min(self.width - patch.width, max(0, x2 - patch.width // 2)),
-                min(self.height - patch.height, max(0, y2 - patch.height // 2)),
-            ),
+        blurred = layer.filter(ImageFilter.GaussianBlur(max(1, radius // 3)))
+        mask = Image.new("L", (self.width, self.height), 0)
+        draw = ImageDraw.Draw(mask)
+        width = max(3, radius * 2)
+        draw.line((x1, y1, x2, y2), fill=210, width=width)
+        for x, y in ((x1, y1), (x2, y2)):
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                fill=210,
+            )
+        mask = mask.filter(ImageFilter.GaussianBlur(max(1, radius // 4)))
+        layer.paste(
+            Image.composite(blurred, layer, mask),
+            (0, 0),
         )
 
     def clear(self) -> None:
@@ -715,4 +716,4 @@ class CanvasModel:
     def _decode(value: str) -> Image.Image:
         raw = base64.b64decode(value.encode("ascii"))
         with Image.open(BytesIO(raw)) as image:
-            return image.convert("RGB")
+            return image.copy()
