@@ -100,6 +100,20 @@ def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--selected-tool", required=True)
     parser.add_argument("--intended-action", required=True)
     parser.add_argument("--visual-assessment", required=True)
+    parser.add_argument(
+        "--pass-name",
+        choices=(
+            "composition",
+            "construction",
+            "form",
+            "materials",
+            "lighting",
+            "texture",
+            "focal_finish",
+        ),
+        default="construction",
+    )
+    parser.add_argument("--detail-key", default="subject")
 
 
 def _add_semantic_arguments(parser: argparse.ArgumentParser) -> None:
@@ -151,6 +165,8 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             arguments.selected_tool,
             arguments.intended_action,
             arguments.visual_assessment,
+            arguments.pass_name,
+            arguments.detail_key,
         )
         action = VisibleAction(
             arguments.command,
