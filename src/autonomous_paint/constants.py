@@ -26,12 +26,14 @@ TOOLS = (
     "ellipse",
     "curve",
     "edit",
+    "gradient",
+    "smudge",
     "fill",
     "eyedropper",
 )
 STYLE_CONTROLS = ("outline", "filled", "both")
 SIZE_CONTROLS = ("size_down", "size_up")
-UTILITY_CONTROLS = ("undo", "clear", "refs", "save")
+UTILITY_CONTROLS = ("brush_fx", "symmetry", "guides", "undo", "clear", "refs", "save")
 
 # These small, visible fiducials let the deterministic screenshot controller
 # find controls from pixels without importing renderer geometry.
@@ -43,6 +45,8 @@ TOOL_MARKERS = OrderedDict(
         ("ellipse", (255, 170, 70)),
         ("curve", (70, 215, 255)),
         ("edit", (255, 125, 210)),
+        ("gradient", (115, 140, 255)),
+        ("smudge", (190, 155, 125)),
         ("fill", (80, 230, 170)),
         ("eyedropper", (238, 140, 255)),
         ("outline", (255, 150, 190)),
@@ -50,6 +54,9 @@ TOOL_MARKERS = OrderedDict(
         ("both", (255, 188, 105)),
         ("size_down", (120, 225, 245)),
         ("size_up", (245, 170, 120)),
+        ("brush_fx", (180, 245, 160)),
+        ("symmetry", (245, 150, 225)),
+        ("guides", (140, 205, 255)),
         ("undo", (255, 220, 90)),
         ("clear", (255, 120, 80)),
         ("refs", (90, 180, 255)),
