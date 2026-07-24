@@ -102,6 +102,25 @@ python scripts/apply_semantic_judgments.py \
   --judgments runs/guinea-pig-tournament/semantic_judgments.json
 ```
 
+To remove the manual judgment-file handoff, provide any vision-capable judge
+command that accepts the generated blind request and writes the requested JSON:
+
+```bash
+python scripts/run_tournament.py \
+  --prompt "A cute guinea pig resting in a 'cuddle cup'" \
+  --run-dir runs/guinea-pig-tournament \
+  --semantic-judge-command \
+  'vision-judge --request {request} --output {output}'
+```
+
+The command receives `semantic_judge_request.json`, containing only the public
+prompt, visible rubric, neutral candidate labels, and copied complete-application
+screenshots. Seeds, plans, canvas state, action logs, review reports, and
+deterministic scores are excluded. Its result is validated and applied
+automatically; the invocation audit, raw judgments, semantic report, montage,
+and updated winner are retained. The same step can be run later with
+`scripts/run_semantic_judge.py`.
+
 The semantic judge hard-gates candidates that are not recognizable without the
 prompt, validates evidence for every rubric score, records localized findings,
 and subtracts a similarity penalty when finalists repeat silhouettes, poses,

@@ -14,6 +14,7 @@ from preflight import ensure_runtime
 ensure_runtime(recording=True)
 
 from autonomous_paint.tournament import run_variant_tournament
+from autonomous_paint.semantic_orchestrator import run_semantic_judge_command
 
 
 def main() -> int:
@@ -46,6 +47,23 @@ def main() -> int:
     parser.add_argument("--revision-actions", dest="revision_budget", type=int, default=10)
     parser.add_argument("--finalists", type=int, default=2)
     parser.add_argument("--references", type=Path)
+    parser.add_argument(
+        "--semantic-judge-command",
+        help=(
+            "Vision judge command template containing {request} and {output}; "
+            "it runs after the deterministic tournament."
+        ),
+    )
+    parser.add_argument(
+        "--recognizability-threshold",
+        type=float,
+        default=7.0,
+    )
+    parser.add_argument(
+        "--semantic-judge-timeout",
+        type=float,
+        default=300.0,
+    )
     arguments = parser.parse_args()
     result = run_variant_tournament(
         arguments.prompt,
@@ -61,6 +79,13 @@ def main() -> int:
         detail_level=arguments.detail_level,
         finalist_count=arguments.finalists,
     )
+    if arguments.semantic_judge_command:
+        result = run_semantic_judge_command(
+            arguments.run_dir,
+            arguments.semantic_judge_command,
+            recognizability_threshold=arguments.recognizability_threshold,
+            timeout_seconds=arguments.semantic_judge_timeout,
+        )
     print(json.dumps(result, indent=2))
     return 0
 
