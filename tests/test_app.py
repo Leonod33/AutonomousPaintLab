@@ -76,6 +76,41 @@ class PaintApplicationTests(unittest.TestCase):
             app.model.curve_points(identifier)[1],  # type: ignore[arg-type]
         )
 
+    def test_gradient_secondary_colour_brush_effects_and_guides_are_visible(self) -> None:
+        app = PaintApplication()
+        self.assertEqual(
+            "secondary:select",
+            app.click(app._secondary_colour_rect.center).control,
+        )
+        self.assertEqual(
+            "secondary:navy",
+            app.click(app._palette_rects["navy"].center).control,
+        )
+        self.assertEqual("primary:select", app.click(app._custom_colour_rect.center).control)
+        self.assertEqual("palette:coral", app.click(app._palette_rects["coral"].center).control)
+        self.assertEqual("gradient", app.click(app._tool_rects["gradient"].center).control)
+        start = (CANVAS_ORIGIN[0], CANVAS_ORIGIN[1] + 300)
+        end = (CANVAS_ORIGIN[0] + 759, CANVAS_ORIGIN[1] + 300)
+        self.assertTrue(app.drag(start, end).drawing_applied)
+        self.assertEqual(PALETTE["coral"], app.model.image.getpixel((0, 300)))
+        self.assertEqual(PALETTE["navy"], app.model.image.getpixel((759, 300)))
+
+        canvas_before_guides = app.model.image.tobytes()
+        self.assertEqual("guides:on", app.click(app._tool_rects["guides"].center).control)
+        self.assertNotEqual(
+            app.render().get_at((CANVAS_ORIGIN[0] + 760 // 3, CANVAS_ORIGIN[1] + 20))[:3],
+            app.model.image.getpixel((760 // 3, 20)),
+        )
+        self.assertEqual(canvas_before_guides, app.model.image.tobytes())
+        self.assertEqual("brush_fx:soft", app.click(app._tool_rects["brush_fx"].center).control)
+        self.assertEqual("symmetry:on", app.click(app._tool_rects["symmetry"].center).control)
+
+        restored = PaintApplication.from_payload(app.to_payload())
+        self.assertEqual("soft", restored.brush_effect)
+        self.assertTrue(restored.symmetry_enabled)
+        self.assertTrue(restored.guides_visible)
+        self.assertEqual(PALETTE["navy"], restored.secondary_colour)
+
 
 if __name__ == "__main__":
     unittest.main()
