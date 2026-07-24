@@ -78,6 +78,38 @@ class CanvasModelTests(unittest.TestCase):
         model.set_layer_visible(2, False)
         self.assertFalse(model.layer_visibility[2])
 
+    def test_directional_gradient_uses_both_colours_and_is_undoable(self) -> None:
+        model = CanvasModel(60, 30)
+        original = model.image.tobytes()
+        model.linear_gradient((0, 15), (59, 15), (10, 20, 30), (210, 220, 230))
+        self.assertEqual((10, 20, 30), model.image.getpixel((0, 15)))
+        self.assertEqual((210, 220, 230), model.image.getpixel((59, 15)))
+        self.assertNotEqual(model.image.getpixel((15, 15)), model.image.getpixel((45, 15)))
+        self.assertTrue(model.undo())
+        self.assertEqual(original, model.image.tobytes())
+
+    def test_brush_effects_are_distinct_and_symmetry_is_single_undo_step(self) -> None:
+        outputs = []
+        for effect in ("solid", "soft", "texture", "scatter"):
+            model = CanvasModel(100, 60)
+            model.effect_brush([(15, 15), (30, 30), (45, 20)], (20, 40, 80), 12, effect)
+            outputs.append(model.image.tobytes())
+        self.assertEqual(4, len(set(outputs)))
+
+        model = CanvasModel(100, 60)
+        baseline = model.image.tobytes()
+        model.effect_brush(
+            [(10, 20), (25, 30)],
+            (200, 20, 40),
+            8,
+            "solid",
+            mirror_horizontal=True,
+        )
+        self.assertNotEqual(model.background, model.image.getpixel((10, 20)))
+        self.assertNotEqual(model.background, model.image.getpixel((89, 20)))
+        self.assertTrue(model.undo())
+        self.assertEqual(baseline, model.image.tobytes())
+
 
 if __name__ == "__main__":
     unittest.main()
