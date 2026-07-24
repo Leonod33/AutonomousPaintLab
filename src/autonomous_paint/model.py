@@ -277,6 +277,73 @@ class CanvasModel:
                 fill=colour,
             )
 
+    def effect_brush(
+        self,
+        points: Iterable[Point],
+        colour: Colour,
+        size: int = 8,
+        effect: str = "solid",
+        mirror_horizontal: bool = False,
+    ) -> None:
+        """Paint a deterministic solid, soft, textured, or scattered stroke."""
+        path = [self._point(point) for point in points]
+        if not path:
+            return
+        if effect == "solid" and not mirror_horizontal:
+            self.brush(path, colour, size)
+            return
+        if effect not in {"soft", "texture", "scatter"}:
+            if effect != "solid":
+                raise ValueError(f"unknown brush effect: {effect}")
+        paths = [path]
+        if mirror_horizontal:
+            paths.append([(self.width - 1 - x, y) for x, y in path])
+        self._remember()
+        overlay = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        radius = max(1, int(size) // 2)
+        for stroke in paths:
+            if effect == "solid":
+                draw.line(stroke, fill=(*colour, 255), width=max(1, size), joint="curve")
+                for x, y in (stroke[0], stroke[-1]):
+                    draw.ellipse(
+                        (x - radius, y - radius, x + radius, y + radius),
+                        fill=(*colour, 255),
+                    )
+            elif effect == "soft":
+                draw.line(
+                    stroke,
+                    fill=(*colour, 150),
+                    width=max(2, int(size)),
+                    joint="curve",
+                )
+                for x, y in stroke:
+                    draw.ellipse(
+                        (x - radius, y - radius, x + radius, y + radius),
+                        fill=(*colour, 90),
+                    )
+            else:
+                spacing = max(1, radius // 2)
+                for path_index, (x, y) in enumerate(stroke):
+                    for dab in range(7 if effect == "scatter" else 5):
+                        angle = (path_index * 137 + dab * 83) * math.pi / 180
+                        reach = (
+                            radius * (0.35 + (dab % 4) * 0.22)
+                            if effect == "scatter"
+                            else radius * (0.15 + (dab % 3) * 0.18)
+                        )
+                        px = round(x + math.cos(angle) * reach)
+                        py = round(y + math.sin(angle) * reach)
+                        dot = max(1, spacing - (dab % 2))
+                        alpha = 145 if effect == "scatter" else 105 + dab * 18
+                        draw.ellipse(
+                            (px - dot, py - dot, px + dot, py + dot),
+                            fill=(*colour, min(230, alpha)),
+                        )
+        if effect == "soft":
+            overlay = overlay.filter(ImageFilter.GaussianBlur(max(1, radius // 2)))
+        self._active_image().alpha_composite(overlay)
+
     def line(
         self,
         start: Point,
@@ -393,6 +460,34 @@ class CanvasModel:
                 draw.line((0, index, self.width, index), fill=(*colour, 255))
             else:
                 draw.line((index, 0, index, self.height), fill=(*colour, 255))
+
+    def linear_gradient(
+        self,
+        start: Point,
+        end: Point,
+        start_colour: Colour,
+        end_colour: Colour,
+    ) -> None:
+        """Fill the active layer with a directional two-colour gradient."""
+        x1, y1 = self._point(start)
+        x2, y2 = self._point(end)
+        dx, dy = x2 - x1, y2 - y1
+        length_squared = dx * dx + dy * dy
+        if length_squared == 0:
+            raise ValueError("gradient drag must have non-zero length")
+        self._remember()
+        gradient = Image.new("RGBA", (self.width, self.height))
+        pixels = gradient.load()
+        for y in range(self.height):
+            for x in range(self.width):
+                ratio = ((x - x1) * dx + (y - y1) * dy) / length_squared
+                ratio = min(1.0, max(0.0, ratio))
+                colour = tuple(
+                    round(first + (second - first) * ratio)
+                    for first, second in zip(start_colour, end_colour)
+                )
+                pixels[x, y] = (*colour, 255)
+        self._layers[self.active_layer]["image"] = gradient
 
     def smudge(self, start: Point, end: Point, radius: int = 12) -> None:
         """Move a softly blurred patch along a short stroke."""

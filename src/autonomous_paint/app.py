@@ -102,8 +102,13 @@ class PaintApplication:
         self.selected_tool = "brush"
         self.selected_colour = "ink"
         self.brush_size = 8
+        self.brush_effect = "solid"
+        self.symmetry_enabled = False
+        self.guides_visible = False
         self.shape_mode = "outline"
         self.custom_colour = (18, 23, 35)
+        self.secondary_colour = PALETTE["white"]
+        self.active_colour_slot = "primary"
         self.recent_colours: list[tuple[int, int, int]] = []
         self.magnifier_point: Point = (CANVAS_SIZE[0] // 2, CANVAS_SIZE[1] // 2)
         self.pending_curve_points: list[Point] = []
@@ -121,7 +126,8 @@ class PaintApplication:
         self._title = pygame.font.Font(None, 34)
         self._tool_rects = self._build_tool_rects()
         self._palette_rects = self._build_palette_rects()
-        self._custom_colour_rect = pygame.Rect(824, 306, 74, 34)
+        self._custom_colour_rect = pygame.Rect(824, 306, 58, 34)
+        self._secondary_colour_rect = pygame.Rect(888, 306, 58, 34)
         self._recent_colour_rects = [
             pygame.Rect(824 + index * 22, 344, 16, 14)
             for index in range(6)
@@ -146,7 +152,7 @@ class PaintApplication:
             + list(UTILITY_CONTROLS)
         )
         for index, name in enumerate(names):
-            rects[name] = pygame.Rect(20 + index * 70, 72, 64, 48)
+            rects[name] = pygame.Rect(20 + index * 54, 72, 50, 48)
         return rects
 
     @staticmethod
@@ -206,6 +212,24 @@ class PaintApplication:
                     delta = -2 if name == "size_down" else 2
                     self.brush_size = min(64, max(1, self.brush_size + delta))
                     return UIResult(True, control=name)
+                if name == "brush_fx":
+                    effects = ("solid", "soft", "texture", "scatter")
+                    self.brush_effect = effects[
+                        (effects.index(self.brush_effect) + 1) % len(effects)
+                    ]
+                    return UIResult(True, control=f"brush_fx:{self.brush_effect}")
+                if name == "symmetry":
+                    self.symmetry_enabled = not self.symmetry_enabled
+                    return UIResult(
+                        True,
+                        control=f"symmetry:{'on' if self.symmetry_enabled else 'off'}",
+                    )
+                if name == "guides":
+                    self.guides_visible = not self.guides_visible
+                    return UIResult(
+                        True,
+                        control=f"guides:{'on' if self.guides_visible else 'off'}",
+                    )
                 if name == "undo":
                     return UIResult(self.model.undo(), control=name)
                 if name == "clear":
@@ -222,6 +246,9 @@ class PaintApplication:
                     return UIResult(True, control=name, saved_path=str(saved))
         for name, rect in self._palette_rects.items():
             if rect.collidepoint(position):
+                if self.active_colour_slot == "secondary":
+                    self.secondary_colour = PALETTE[name]
+                    return UIResult(True, control=f"secondary:{name}")
                 self.selected_colour = name
                 self._remember_colour(PALETTE[name])
                 return UIResult(True, control=f"palette:{name}")
@@ -249,8 +276,11 @@ class PaintApplication:
                 self.model.move_layer(self.model.active_layer, 1)
             return UIResult(True, control=name)
         if self._custom_colour_rect.collidepoint(position):
-            self.selected_colour = "custom"
-            return UIResult(True, control="palette:custom")
+            self.active_colour_slot = "primary"
+            return UIResult(True, control="primary:select")
+        if self._secondary_colour_rect.collidepoint(position):
+            self.active_colour_slot = "secondary"
+            return UIResult(True, control="secondary:select")
         for index, rect in enumerate(self._recent_colour_rects):
             if rect.collidepoint(position) and index < len(self.recent_colours):
                 self.set_custom_colour(self.recent_colours[index])
@@ -267,7 +297,13 @@ class PaintApplication:
                 self.model.fill(local, self._colour())
                 return UIResult(True, drawing_applied=True, control="canvas")
             if self.selected_tool == "brush":
-                self.model.brush([local], self._colour(), self.brush_size)
+                self.model.effect_brush(
+                    [local],
+                    self._colour(),
+                    self.brush_size,
+                    self.brush_effect,
+                    mirror_horizontal=self.symmetry_enabled,
+                )
                 return UIResult(True, drawing_applied=True, control="canvas")
             if self.selected_tool == "curve":
                 self.pending_curve_points.append(local)
@@ -318,7 +354,13 @@ class PaintApplication:
                 )
                 for index in range(steps + 1)
             ]
-            self.model.brush(path, colour, self.brush_size)
+            self.model.effect_brush(
+                path,
+                colour,
+                self.brush_size,
+                self.brush_effect,
+                mirror_horizontal=self.symmetry_enabled,
+            )
         elif self.selected_tool == "line":
             self.model.line(local_start, local_end, colour, self.brush_size)
         elif self.selected_tool == "rectangle":
@@ -358,6 +400,15 @@ class PaintApplication:
             point_index = self.model.nearest_curve_point(identifier, local_start)
             self.model.edit_curve_point(identifier, point_index, local_end)
             self.selected_curve_id = identifier
+        elif self.selected_tool == "gradient":
+            self.model.linear_gradient(
+                local_start,
+                local_end,
+                colour,
+                self.secondary_colour,
+            )
+        elif self.selected_tool == "smudge":
+            self.model.smudge(local_start, local_end, max(4, self.brush_size))
         else:
             return self.click(start)
         return UIResult(True, drawing_applied=True, control="canvas")
@@ -365,6 +416,7 @@ class PaintApplication:
     def set_custom_colour(self, colour: tuple[int, int, int]) -> None:
         self.custom_colour = tuple(min(255, max(0, int(channel))) for channel in colour)
         self.selected_colour = "custom"
+        self.active_colour_slot = "primary"
         self._remember_colour(self.custom_colour)
 
     def _colour(self) -> tuple[int, int, int]:
@@ -440,10 +492,36 @@ class PaintApplication:
         surface.blit(seed_text, (1125, 28))
 
     def _draw_toolbar(self, surface: pygame.Surface) -> None:
+        labels = {
+            "brush": "BRUSH",
+            "line": "LINE",
+            "rectangle": "RECT",
+            "ellipse": "ELLIP",
+            "curve": "CURV",
+            "edit": "EDIT",
+            "gradient": "GRAD",
+            "smudge": "SMDG",
+            "fill": "FILL",
+            "eyedropper": "EYE",
+            "outline": "OUT",
+            "filled": "FULL",
+            "both": "BOTH",
+            "size_down": "SIZE−",
+            "size_up": "SIZE+",
+            "brush_fx": "FX",
+            "symmetry": "SYM",
+            "guides": "GRID",
+        }
         for name, rect in self._tool_rects.items():
             selected = name == self.selected_tool or (
                 name == "refs" and self.reference_board_open
-            ) or name == self.shape_mode
+            ) or name == self.shape_mode or (
+                name == "brush_fx" and self.brush_effect != "solid"
+            ) or (
+                name == "symmetry" and self.symmetry_enabled
+            ) or (
+                name == "guides" and self.guides_visible
+            )
             pygame.draw.rect(surface, PANEL_LIGHT if selected else PANEL, rect, border_radius=7)
             pygame.draw.rect(
                 surface,
@@ -454,8 +532,8 @@ class PaintApplication:
             )
             marker = pygame.Rect(rect.left + 6, rect.top + 6, 12, 12)
             pygame.draw.rect(surface, TOOL_MARKERS[name], marker, border_radius=2)
-            label = self._tiny.render(name.upper(), True, TEXT)
-            surface.blit(label, label.get_rect(center=(rect.centerx + 4, rect.centery + 5)))
+            label = self._tiny.render(labels.get(name, name.upper()), True, TEXT)
+            surface.blit(label, label.get_rect(center=(rect.centerx, rect.centery + 5)))
 
     def _draw_canvas(self, surface: pygame.Surface) -> None:
         border = self.canvas_rect.inflate(CANVAS_BORDER_WIDTH * 2, CANVAS_BORDER_WIDTH * 2)
@@ -463,6 +541,8 @@ class PaintApplication:
         raw = self.model.image.tobytes()
         canvas_surface = pygame.image.fromstring(raw, self.model.image.size, "RGB")
         surface.blit(canvas_surface, CANVAS_ORIGIN)
+        if self.guides_visible and not self.reference_board_open:
+            self._draw_composition_guides(surface)
         if self.reference_board_open:
             self._draw_reference_board(surface)
         elif self.review_findings:
@@ -492,7 +572,7 @@ class PaintApplication:
             f"LAYER {self.model.active_layer + 1}/{len(self.model.layer_names)} "
             f"{self.model.layer_names[self.model.active_layer]}"
         )
-        self._blit_text(surface, layer_status, (1022, 132), self._tiny, MUTED)
+        self._blit_text(surface, layer_status, (824, 96), self._tiny, MUTED)
         self._blit_text(surface, "PALETTE", (824, 158), self._font, TEXT)
         for name, rect in self._palette_rects.items():
             selected = name == self.selected_colour
@@ -510,19 +590,37 @@ class PaintApplication:
             surface.blit(label, (rect.left, rect.bottom + 5))
 
         custom = self._custom_colour_rect
-        pygame.draw.rect(surface, self.custom_colour, custom, border_radius=5)
+        pygame.draw.rect(surface, self._colour(), custom, border_radius=5)
         pygame.draw.rect(
             surface,
-            SELECTED if self.selected_colour == "custom" else BUTTON_BORDER,
+            SELECTED if self.active_colour_slot == "primary" else BUTTON_BORDER,
             custom,
             width=3,
             border_radius=5,
         )
-        status = (
-            f"{self.shape_mode.upper()}  •  {self.brush_size}px  •  "
-            f"XY {self.magnifier_point}"
+        self._blit_text(surface, "A", (custom.left + 23, custom.top + 9), self._tiny, TEXT)
+        secondary = self._secondary_colour_rect
+        pygame.draw.rect(surface, self.secondary_colour, secondary, border_radius=5)
+        pygame.draw.rect(
+            surface,
+            SELECTED if self.active_colour_slot == "secondary" else BUTTON_BORDER,
+            secondary,
+            width=3,
+            border_radius=5,
         )
-        self._blit_text(surface, status, (912, 315), self._tiny, MUTED)
+        self._blit_text(
+            surface,
+            "B",
+            (secondary.left + 23, secondary.top + 9),
+            self._tiny,
+            TEXT,
+        )
+        status = (
+            f"{self.shape_mode[:3].upper()} {self.brush_size}px | "
+            f"{self.brush_effect[:4].upper()} | "
+            f"SYM {'ON' if self.symmetry_enabled else 'OFF'}"
+        )
+        self._blit_text(surface, status, (952, 315), self._tiny, MUTED)
         self._draw_magnifier(surface)
         for index, rect in enumerate(self._recent_colour_rects):
             colour = (
@@ -617,6 +715,19 @@ class PaintApplication:
             colour = PALETTE["yellow"] if index == 1 else ACCENT
             pygame.draw.circle(surface, BACKGROUND, point, 7)
             pygame.draw.circle(surface, colour, point, 7, width=2)
+
+    def _draw_composition_guides(self, surface: pygame.Surface) -> None:
+        """Render rule-of-thirds, centre, and diagonal guides as annotations."""
+        overlay = pygame.Surface(CANVAS_SIZE, pygame.SRCALPHA)
+        guide = (*ACCENT, 105)
+        width, height = CANVAS_SIZE
+        for x in (width // 3, width * 2 // 3, width // 2):
+            pygame.draw.line(overlay, guide, (x, 0), (x, height), 1)
+        for y in (height // 3, height * 2 // 3, height // 2):
+            pygame.draw.line(overlay, guide, (0, y), (width, y), 1)
+        pygame.draw.line(overlay, (*PALETTE["yellow"], 70), (0, 0), (width, height), 1)
+        pygame.draw.line(overlay, (*PALETTE["yellow"], 70), (width, 0), (0, height), 1)
+        surface.blit(overlay, CANVAS_ORIGIN)
 
     def _draw_magnifier(self, surface: pygame.Surface) -> None:
         x, y = self.magnifier_point
@@ -852,8 +963,13 @@ class PaintApplication:
             "selected_tool": self.selected_tool,
             "selected_colour": self.selected_colour,
             "brush_size": self.brush_size,
+            "brush_effect": self.brush_effect,
+            "symmetry_enabled": self.symmetry_enabled,
+            "guides_visible": self.guides_visible,
             "shape_mode": self.shape_mode,
             "custom_colour": list(self.custom_colour),
+            "secondary_colour": list(self.secondary_colour),
+            "active_colour_slot": self.active_colour_slot,
             "recent_colours": [list(colour) for colour in self.recent_colours],
             "magnifier_point": list(self.magnifier_point),
             "pending_curve_points": [
@@ -892,8 +1008,13 @@ class PaintApplication:
         app.selected_tool = payload["selected_tool"]
         app.selected_colour = payload["selected_colour"]
         app.brush_size = int(payload["brush_size"])
+        app.brush_effect = str(payload.get("brush_effect", "solid"))
+        app.symmetry_enabled = bool(payload.get("symmetry_enabled", False))
+        app.guides_visible = bool(payload.get("guides_visible", False))
         app.shape_mode = str(payload.get("shape_mode", "outline"))
         app.custom_colour = tuple(payload.get("custom_colour", (18, 23, 35)))  # type: ignore[arg-type]
+        app.secondary_colour = tuple(payload.get("secondary_colour", PALETTE["white"]))  # type: ignore[arg-type]
+        app.active_colour_slot = str(payload.get("active_colour_slot", "primary"))
         app.recent_colours = [
             tuple(colour)  # type: ignore[arg-type]
             for colour in payload.get("recent_colours", [])  # type: ignore[union-attr]
