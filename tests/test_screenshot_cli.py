@@ -50,6 +50,13 @@ class ScreenshotCliTests(unittest.TestCase):
                     "review",
                     "--assessment",
                     "The face needs a clearer expression.",
+                    "--recognizability-score",
+                    "8.0",
+                    "--recognizable-without-prompt",
+                    "--prompt-fidelity-score",
+                    "8.5",
+                    "--semantic-summary",
+                    "The requested subject is recognizable, with one weak focal detail.",
                     "--finding",
                     (
                         '{"area":"Robot face","region":[200,100,180,150],'

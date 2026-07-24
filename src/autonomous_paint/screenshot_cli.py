@@ -9,7 +9,7 @@ import sys
 from typing import Any
 
 from .references import load_reference_manifest
-from .review import ReviewFinding
+from .review import FindingVerification, ReviewFinding, SemanticAssessment
 from .session import DecisionSummary, PaintRun, VisibleAction
 
 
@@ -42,6 +42,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="attributed references.json prepared before screenshot-only play",
     )
+    reset.add_argument(
+        "--semantic-quality",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require prompt-aware recognizability reviews and reinspection.",
+    )
+    reset.add_argument(
+        "--recognizability-threshold",
+        type=float,
+        default=7.0,
+    )
 
     subparsers.add_parser("capture")
 
@@ -67,6 +78,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="JSON object with area, region, issue, suggestion, priority, and confidence",
     )
+    _add_semantic_arguments(review)
+
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--assessment", required=True)
+    verify.add_argument(
+        "--verification",
+        action="append",
+        default=[],
+        help="JSON object with finding_id, status, evidence, and remaining_issue",
+    )
+    _add_semantic_arguments(verify)
 
     final = subparsers.add_parser("finalize")
     final.add_argument("--fps", type=int, default=3)
@@ -78,6 +100,17 @@ def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--selected-tool", required=True)
     parser.add_argument("--intended-action", required=True)
     parser.add_argument("--visual-assessment", required=True)
+
+
+def _add_semantic_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--recognizability-score", type=float)
+    parser.add_argument(
+        "--recognizable-without-prompt",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument("--prompt-fidelity-score", type=float)
+    parser.add_argument("--semantic-summary")
 
 
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -94,6 +127,8 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             min_actions=arguments.min_actions,
             target_actions=arguments.target_actions,
             detail_level=arguments.detail_level,
+            semantic_quality_required=arguments.semantic_quality,
+            recognizability_threshold=arguments.recognizability_threshold,
         )
         session.app.set_summary(
             phase="MODEL-VISION SCREENSHOT INTERFACE",
@@ -137,7 +172,24 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             _parse_finding(value, index)
             for index, value in enumerate(arguments.finding, start=1)
         )
-        screenshot = session.review(arguments.assessment, findings)
+        semantic = _parse_semantic_assessment(arguments)
+        screenshot = session.review(
+            arguments.assessment,
+            findings,
+            semantic_assessment=semantic,
+        )
+        _save_state(arguments.state_file, session)
+        return _observation(session, screenshot)
+    if arguments.command == "verify":
+        verifications = tuple(
+            _parse_verification(value, index)
+            for index, value in enumerate(arguments.verification, start=1)
+        )
+        screenshot = session.verify_findings(
+            arguments.assessment,
+            verifications,
+            semantic_assessment=_parse_semantic_assessment(arguments),
+        )
         _save_state(arguments.state_file, session)
         return _observation(session, screenshot)
     if arguments.command == "finalize":
@@ -166,6 +218,8 @@ def _observation(session: PaintRun, screenshot: Path) -> dict[str, Any]:
         "revision_action_budget": session.revision_budget,
         "reference_count": len(session.app.references),
         "visible_review_findings": len(session.app.review_findings),
+        "semantic_quality_required": session.semantic_quality_required,
+        "recognizability_threshold": session.recognizability_threshold,
         "quality_gates": session.quality_gate_status(),
     }
 
@@ -179,6 +233,42 @@ def _parse_finding(value: str, index: int) -> ReviewFinding:
         raise ValueError(f"finding {index} must be a JSON object")
     payload.setdefault("finding_id", f"R?-{index}")
     return ReviewFinding.from_dict(payload)
+
+
+def _parse_semantic_assessment(
+    arguments: argparse.Namespace,
+) -> SemanticAssessment | None:
+    values = (
+        arguments.recognizability_score,
+        arguments.recognizable_without_prompt,
+        arguments.prompt_fidelity_score,
+        arguments.semantic_summary,
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise ValueError(
+            "semantic review requires recognizability score, recognizable-without-prompt, "
+            "prompt-fidelity score, and semantic summary"
+        )
+    return SemanticAssessment(
+        float(arguments.recognizability_score),
+        bool(arguments.recognizable_without_prompt),
+        float(arguments.prompt_fidelity_score),
+        str(arguments.semantic_summary),
+    )
+
+
+def _parse_verification(value: str, index: int) -> FindingVerification:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"verification {index} is not valid JSON: {error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"verification {index} must be a JSON object")
+    return FindingVerification.from_dict(payload)
 
 
 def _save_state(path: Path, session: PaintRun) -> None:

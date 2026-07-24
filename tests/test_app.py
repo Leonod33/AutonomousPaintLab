@@ -51,6 +51,31 @@ class PaintApplicationTests(unittest.TestCase):
         self.assertEqual(4, restored.review_checkpoints)
         self.assertEqual(6, restored.revision_actions)
 
+    def test_visible_curve_tool_creates_and_edits_persistent_curve(self) -> None:
+        app = PaintApplication()
+        self.assertEqual("curve", app.click(app._tool_rects["curve"].center).control)
+        start = (CANVAS_ORIGIN[0] + 100, CANVAS_ORIGIN[1] + 300)
+        end = (CANVAS_ORIGIN[0] + 500, CANVAS_ORIGIN[1] + 300)
+        created = app.drag(start, end)
+        self.assertTrue(created.drawing_applied)
+        identifier = app.selected_curve_id
+        self.assertIsNotNone(identifier)
+        control_before = app.model.curve_points(identifier)[1]  # type: ignore[arg-type]
+        self.assertEqual("edit", app.click(app._tool_rects["edit"].center).control)
+        control_screen = (
+            CANVAS_ORIGIN[0] + control_before[0],
+            CANVAS_ORIGIN[1] + control_before[1],
+        )
+        edited = app.drag(
+            control_screen,
+            (control_screen[0], control_screen[1] + 80),
+        )
+        self.assertTrue(edited.drawing_applied)
+        self.assertNotEqual(
+            control_before,
+            app.model.curve_points(identifier)[1],  # type: ignore[arg-type]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

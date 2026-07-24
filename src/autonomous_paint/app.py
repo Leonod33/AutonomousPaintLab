@@ -106,6 +106,8 @@ class PaintApplication:
         self.custom_colour = (18, 23, 35)
         self.recent_colours: list[tuple[int, int, int]] = []
         self.magnifier_point: Point = (CANVAS_SIZE[0] // 2, CANVAS_SIZE[1] // 2)
+        self.pending_curve_points: list[Point] = []
+        self.selected_curve_id: str | None = None
         self.summary = VisibleSummary()
         self.references = references
         self.reference_board_open = False
@@ -126,9 +128,12 @@ class PaintApplication:
         ]
         self._layer_rects = {
             "layer_prev": pygame.Rect(824, 124, 42, 28),
-            "layer_add": pygame.Rect(872, 124, 42, 28),
-            "layer_remove": pygame.Rect(920, 124, 42, 28),
-            "layer_next": pygame.Rect(968, 124, 42, 28),
+            "layer_add": pygame.Rect(870, 124, 42, 28),
+            "layer_remove": pygame.Rect(916, 124, 42, 28),
+            "layer_next": pygame.Rect(962, 124, 42, 28),
+            "layer_visible": pygame.Rect(1008, 124, 52, 28),
+            "layer_down": pygame.Rect(1064, 124, 52, 28),
+            "layer_up": pygame.Rect(1120, 124, 52, 28),
         }
 
     @staticmethod
@@ -141,7 +146,7 @@ class PaintApplication:
             + list(UTILITY_CONTROLS)
         )
         for index, name in enumerate(names):
-            rects[name] = pygame.Rect(20 + index * 80, 72, 72, 48)
+            rects[name] = pygame.Rect(20 + index * 70, 72, 64, 48)
         return rects
 
     @staticmethod
@@ -191,6 +196,8 @@ class PaintApplication:
                 if name in TOOLS:
                     self.selected_tool = name
                     self.summary.tool = name
+                    if name != "curve":
+                        self.pending_curve_points = []
                     return UIResult(True, control=name)
                 if name in STYLE_CONTROLS:
                     self.shape_mode = name
@@ -231,6 +238,15 @@ class PaintApplication:
                 self.model.select_layer(
                     min(len(self.model.layer_names) - 1, self.model.active_layer + 1)
                 )
+            elif name == "layer_visible":
+                self.model.set_layer_visible(
+                    self.model.active_layer,
+                    not self.model.layer_visibility[self.model.active_layer],
+                )
+            elif name == "layer_down":
+                self.model.move_layer(self.model.active_layer, -1)
+            elif name == "layer_up":
+                self.model.move_layer(self.model.active_layer, 1)
             return UIResult(True, control=name)
         if self._custom_colour_rect.collidepoint(position):
             self.selected_colour = "custom"
@@ -253,6 +269,32 @@ class PaintApplication:
             if self.selected_tool == "brush":
                 self.model.brush([local], self._colour(), self.brush_size)
                 return UIResult(True, drawing_applied=True, control="canvas")
+            if self.selected_tool == "curve":
+                self.pending_curve_points.append(local)
+                if len(self.pending_curve_points) < 3:
+                    return UIResult(
+                        True,
+                        control=f"curve_point:{len(self.pending_curve_points)}",
+                    )
+                self.selected_curve_id = self.model.add_curve_object(
+                    self.pending_curve_points[0],
+                    self.pending_curve_points[1],
+                    self.pending_curve_points[2],
+                    self._colour(),
+                    self.brush_size,
+                )
+                self.pending_curve_points = []
+                return UIResult(
+                    True,
+                    drawing_applied=True,
+                    control="curve:create",
+                )
+            if self.selected_tool == "edit":
+                self.selected_curve_id = self.model.nearest_curve(local)
+                return UIResult(
+                    self.selected_curve_id is not None,
+                    control="curve:select",
+                )
         return UIResult(False)
 
     def drag(self, start: Point, end: Point, steps: int = 12) -> UIResult:
@@ -295,6 +337,27 @@ class PaintApplication:
                 self.brush_size,
                 filled=self.shape_mode in {"filled", "both"},
             )
+        elif self.selected_tool == "curve":
+            control = (
+                round((local_start[0] + local_end[0]) / 2),
+                min(local_start[1], local_end[1])
+                - max(18, abs(local_end[0] - local_start[0]) // 5),
+            )
+            self.selected_curve_id = self.model.add_curve_object(
+                local_start,
+                control,
+                local_end,
+                colour,
+                self.brush_size,
+            )
+            self.pending_curve_points = []
+        elif self.selected_tool == "edit":
+            identifier = self.selected_curve_id or self.model.nearest_curve(local_start)
+            if identifier is None:
+                return UIResult(False, control="curve:edit")
+            point_index = self.model.nearest_curve_point(identifier, local_start)
+            self.model.edit_curve_point(identifier, point_index, local_end)
+            self.selected_curve_id = identifier
         else:
             return self.click(start)
         return UIResult(True, drawing_applied=True, control="canvas")
@@ -404,6 +467,8 @@ class PaintApplication:
             self._draw_reference_board(surface)
         elif self.review_findings:
             self._draw_review_overlays(surface)
+        elif self.selected_tool in {"curve", "edit"}:
+            self._draw_curve_handles(surface)
 
     def _draw_side_panel(self, surface: pygame.Surface) -> None:
         panel = pygame.Rect(804, 64, 416, 672)
@@ -414,6 +479,9 @@ class PaintApplication:
             "layer_add": "+",
             "layer_remove": "−",
             "layer_next": ">",
+            "layer_visible": "EYE",
+            "layer_down": "DOWN",
+            "layer_up": "UP",
         }
         for name, rect in self._layer_rects.items():
             pygame.draw.rect(surface, PANEL_LIGHT, rect, border_radius=5)
@@ -526,6 +594,29 @@ class PaintApplication:
             number = self._small.render(str(index), True, BACKGROUND)
             overlay.blit(number, number.get_rect(center=badge.center))
         surface.blit(overlay, CANVAS_ORIGIN)
+
+    def _draw_curve_handles(self, surface: pygame.Surface) -> None:
+        """Show curve anchors and controls without modifying canvas state."""
+        points: tuple[Point, ...] = ()
+        if self.selected_curve_id is not None:
+            try:
+                points = self.model.curve_points(self.selected_curve_id)
+            except KeyError:
+                self.selected_curve_id = None
+        if not points and self.pending_curve_points:
+            points = tuple(self.pending_curve_points)
+        if not points:
+            return
+        translated = [
+            (point[0] + CANVAS_ORIGIN[0], point[1] + CANVAS_ORIGIN[1])
+            for point in points
+        ]
+        if len(translated) >= 2:
+            pygame.draw.lines(surface, ACCENT, False, translated, 1)
+        for index, point in enumerate(translated):
+            colour = PALETTE["yellow"] if index == 1 else ACCENT
+            pygame.draw.circle(surface, BACKGROUND, point, 7)
+            pygame.draw.circle(surface, colour, point, 7, width=2)
 
     def _draw_magnifier(self, surface: pygame.Surface) -> None:
         x, y = self.magnifier_point
@@ -765,6 +856,10 @@ class PaintApplication:
             "custom_colour": list(self.custom_colour),
             "recent_colours": [list(colour) for colour in self.recent_colours],
             "magnifier_point": list(self.magnifier_point),
+            "pending_curve_points": [
+                list(point) for point in self.pending_curve_points
+            ],
+            "selected_curve_id": self.selected_curve_id,
             "summary": asdict(self.summary),
             "references": [reference.to_dict() for reference in self.references],
             "reference_board_open": self.reference_board_open,
@@ -804,6 +899,14 @@ class PaintApplication:
             for colour in payload.get("recent_colours", [])  # type: ignore[union-attr]
         ]
         app.magnifier_point = tuple(payload.get("magnifier_point", (380, 300)))  # type: ignore[arg-type]
+        app.pending_curve_points = [
+            tuple(point)  # type: ignore[arg-type]
+            for point in payload.get("pending_curve_points", [])
+        ]
+        selected_curve_id = payload.get("selected_curve_id")
+        app.selected_curve_id = (
+            str(selected_curve_id) if selected_curve_id is not None else None
+        )
         app.summary = VisibleSummary(**payload["summary"])
         app.reference_board_open = bool(payload.get("reference_board_open", False))
         app.review_findings = tuple(

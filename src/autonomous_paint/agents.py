@@ -422,6 +422,14 @@ def _apply_structured(
             size,
             filled=action.shape_mode in {"filled", "both"},
         )
+    elif action.tool == "curve":
+        end = action.end or action.start
+        control = (
+            round((action.start[0] + end[0]) / 2),
+            min(action.start[1], end[1])
+            - max(18, abs(end[0] - action.start[0]) // 5),
+        )
+        model.add_curve_object(action.start, control, end, colour, size)
     else:
         raise ValueError(f"unsupported structured tool: {action.tool}")
     run.app.drawing_actions += 1

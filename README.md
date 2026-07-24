@@ -21,9 +21,11 @@ complete application PNG, and its only drawing outputs are visible UI actions.
 
 Reviews are region-specific: numbered boxes identify what needs work, while the
 side panel and `review_report.md` explain the issue, visible evidence, priority,
-confidence, and proposed correction in ordinary language. The report then names
-the finding that triggered revision, links the visible action, records deferred
-ideas, and checks whether changed pixels stayed inside the intended region.
+confidence, and proposed correction in ordinary language. Genuine model-vision
+runs additionally require recognizability and prompt-fidelity scores. A later
+revision no longer clears a finding by itself: the agent must reinspect every
+actionable region and mark it resolved, improved, or unresolved with new visible
+evidence.
 
 Web or local research images can be prepared as an attributed reference board.
 The agent opens that board through the visible **REFS** control, so references
@@ -73,6 +75,38 @@ uses 140/220/320 and three. Save is blocked until the minimum, configured
 reviews, required passes, reference rule, and high-priority correction checks
 all pass. `quality_gates.json` records every check.
 
+The model-vision screenshot CLI enables semantic quality gates by default:
+
+```bash
+python scripts/screenshot_cli.py --state-file session.json review \
+  --assessment "The subject is recognizable but the front rim looks rigid." \
+  --recognizability-score 7.5 --recognizable-without-prompt \
+  --prompt-fidelity-score 8.0 \
+  --semantic-summary "A resting guinea pig and enclosing bed are clear." \
+  --finding '{"area":"Front rim","region":[120,370,520,110],"issue":"The rim is too straight.","suggestion":"Reshape the editable curve into a compressed padded arc.","priority":"high","confidence":0.92,"evidence":"The visible front edge is a single rigid horizontal segment."}'
+
+python scripts/screenshot_cli.py --state-file session.json verify \
+  --assessment "The revised rim now bows and compresses below the paws." \
+  --recognizability-score 8.2 --recognizable-without-prompt \
+  --prompt-fidelity-score 8.5 \
+  --semantic-summary "The guinea pig and padded cup are now both immediately clear." \
+  --verification '{"finding_id":"R1-1","status":"resolved","evidence":"The formerly straight edge is now an uneven padded arc."}'
+```
+
+For tournaments, keep the deterministic pixel score as a reproducible baseline,
+then apply blind model-vision judgments with:
+
+```bash
+python scripts/apply_semantic_judgments.py \
+  --run-dir runs/guinea-pig-tournament \
+  --judgments runs/guinea-pig-tournament/semantic_judgments.json
+```
+
+The semantic judge hard-gates candidates that are not recognizable without the
+prompt, validates evidence for every rubric score, records localized findings,
+and subtracts a similarity penalty when finalists repeat silhouettes, poses,
+framing, palettes, or construction.
+
 Prepare an attributed reference:
 
 ```bash
@@ -115,11 +149,17 @@ finalist and produces `tournament.json`, `tournament_report.md`,
 
 ## Paint v2 controls
 
-The visible application now includes adjustable 1–64 px strokes, outlined,
-filled, and combined shape modes, eyedropper sampling, custom/recent colour
-state, an expanded natural palette, a cursor-coordinate magnifier, and a visible
-layer stack. The canvas model also supports named layers, polygons, quadratic
-Bézier curves, gradients, and smudging while preserving undo and serialization.
+The visible application includes adjustable 1–64 px strokes, outlined, filled,
+and combined shape modes, eyedropper sampling, custom/recent colour state, an
+expanded natural palette, and a coordinate magnifier. Layers can be selected,
+added, removed, hidden, revealed, and moved through the compositing order.
+
+The **CURVE** tool creates a persistent quadratic Bézier object. Dragging makes
+a useful bowed curve in one drawing action; three clicks provide explicit
+start, control, and end points. Select **EDIT** and drag an anchor or the yellow
+control handle to reshape the curve without repainting the surrounding image.
+Curves, control points, layer ordering, undo history, and raster content all
+survive session serialization.
 
 Example outputs:
 

@@ -52,6 +52,32 @@ class CanvasModelTests(unittest.TestCase):
         self.assertTrue(model.undo())
         self.assertNotEqual(baseline, model.image.tobytes())
 
+    def test_persistent_curve_can_be_selected_reshaped_and_serialized(self) -> None:
+        model = CanvasModel(100, 80)
+        identifier = model.add_curve_object(
+            (10, 60),
+            (50, 10),
+            (90, 60),
+            (10, 20, 30),
+            5,
+        )
+        before = model.image.tobytes()
+        self.assertEqual(identifier, model.nearest_curve((50, 35)))
+        model.edit_curve_point(identifier, 1, (50, 55))
+        self.assertNotEqual(before, model.image.tobytes())
+        restored = CanvasModel.from_payload(model.to_payload())
+        self.assertEqual(model.image.tobytes(), restored.image.tobytes())
+        self.assertEqual((50, 55), restored.curve_points(identifier)[1])
+
+    def test_layers_can_be_reordered_and_hidden(self) -> None:
+        model = CanvasModel(40, 40)
+        model.add_layer("Subject")
+        model.add_layer("Highlights")
+        self.assertEqual(2, model.move_layer(1, 1))
+        self.assertEqual(("Background", "Highlights", "Subject"), model.layer_names)
+        model.set_layer_visible(2, False)
+        self.assertFalse(model.layer_visibility[2])
+
 
 if __name__ == "__main__":
     unittest.main()

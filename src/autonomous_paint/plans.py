@@ -437,13 +437,13 @@ def _guinea_pig_plan(
             "form", "anatomy", None, "filled",
         ),
         _action(
-            "line", "storm", (126, 411), (654, 411),
-            "Clarify the padded front rim.", "Draw a curved-looking seam across the cup front.",
+            "curve", "storm", (126, 411), (654, 411),
+            "Clarify the padded front rim.", "Draw an editable bowed seam across the cup front.",
             "materials", "cuddle_cup", 7,
         ),
         _action(
-            "line", "white", (142, 398), (640, 398),
-            "Light the plush rim.", "Add a soft upper highlight to the cup.",
+            "curve", "white", (142, 398), (640, 398),
+            "Light the plush rim.", "Add an editable curved highlight to the cup.",
             "lighting", "cuddle_cup", 5,
         ),
         _action(

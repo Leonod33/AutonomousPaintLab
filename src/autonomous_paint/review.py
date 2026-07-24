@@ -55,6 +55,68 @@ class ReviewFinding:
         )
 
 
+@dataclass(frozen=True)
+class FindingVerification:
+    """A later visual reinspection of one concrete review finding."""
+
+    finding_id: str
+    status: str
+    evidence: str
+    remaining_issue: str = ""
+
+    def __post_init__(self) -> None:
+        if self.status not in {"resolved", "improved", "unresolved"}:
+            raise ValueError(
+                "finding verification status must be resolved, improved, or unresolved"
+            )
+        if not self.finding_id or not self.evidence:
+            raise ValueError("verification finding id and visible evidence are required")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "FindingVerification":
+        return cls(
+            finding_id=str(value["finding_id"]),
+            status=str(value["status"]).lower(),
+            evidence=str(value["evidence"]),
+            remaining_issue=str(value.get("remaining_issue", "")),
+        )
+
+
+@dataclass(frozen=True)
+class SemanticAssessment:
+    """Prompt-aware visual assessment supplied from the rendered screenshot."""
+
+    recognizability_score: float
+    recognizable_without_prompt: bool
+    prompt_fidelity_score: float
+    summary: str
+
+    def __post_init__(self) -> None:
+        for label, value in (
+            ("recognizability", self.recognizability_score),
+            ("prompt fidelity", self.prompt_fidelity_score),
+        ):
+            if not 0.0 <= value <= 10.0:
+                raise ValueError(f"{label} score must be between zero and ten")
+        if not self.summary.strip():
+            raise ValueError("semantic assessment summary is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "SemanticAssessment":
+        return cls(
+            recognizability_score=float(value["recognizability_score"]),
+            recognizable_without_prompt=bool(value["recognizable_without_prompt"]),
+            prompt_fidelity_score=float(value["prompt_fidelity_score"]),
+            summary=str(value["summary"]),
+        )
+
+
 def generate_review_findings(
     screenshot: Path,
     canvas_origin: tuple[int, int],

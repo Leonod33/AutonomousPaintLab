@@ -15,7 +15,7 @@ from .app import PaintApplication, UIResult
 from .constants import CANVAS_ORIGIN
 from .references import ReferenceCard
 from .recording import encode_recordings, save_frame, save_png
-from .review import ReviewFinding
+from .review import FindingVerification, ReviewFinding, SemanticAssessment
 from .quality import BudgetPolicy, resolve_budget_policy
 
 
@@ -52,6 +52,8 @@ class PaintRun:
         target_actions: int | None = None,
         max_actions: int | None = None,
         detail_level: str = "standard",
+        semantic_quality_required: bool = False,
+        recognizability_threshold: float = 7.0,
     ) -> None:
         policy = resolve_budget_policy(
             action_budget=action_budget,
@@ -74,6 +76,10 @@ class PaintRun:
         self.revision_budget = policy.revision_actions
         self.detail_level = policy.detail_level
         self.variant_index = variant_index
+        self.semantic_quality_required = bool(semantic_quality_required)
+        self.recognizability_threshold = float(recognizability_threshold)
+        if not 0.0 <= self.recognizability_threshold <= 10.0:
+            raise ValueError("recognizability threshold must be between zero and ten")
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.observation_dir = self.run_dir / "screenshots"
         self.frame_dir = self.run_dir / "frames"
@@ -122,6 +128,8 @@ class PaintRun:
                     if reference.image_path and Path(reference.image_path).is_file()
                 ),
                 "variant_index": self.variant_index,
+                "semantic_quality_required": self.semantic_quality_required,
+                "recognizability_threshold": self.recognizability_threshold,
             },
         )
 
@@ -199,9 +207,14 @@ class PaintRun:
         assessment: str,
         findings: tuple[ReviewFinding, ...] = (),
         goal: str = "Review the complete canvas.",
+        semantic_assessment: SemanticAssessment | None = None,
     ) -> Path:
         if self.app.review_checkpoints >= self.review_budget:
             raise RuntimeError("review checkpoint budget exhausted")
+        if self.semantic_quality_required and semantic_assessment is None:
+            raise RuntimeError(
+                "semantic quality review requires recognizability and prompt-fidelity assessment"
+            )
         self.app.review_checkpoints += 1
         if not findings:
             findings = (
@@ -227,12 +240,104 @@ class PaintRun:
                 "type": "review",
                 "assessment": assessment,
                 "findings": [finding.to_dict() for finding in findings],
+                "semantic_assessment": (
+                    semantic_assessment.to_dict()
+                    if semantic_assessment is not None
+                    else None
+                ),
                 "drawing_actions": self.app.drawing_actions,
                 "review_checkpoints": self.app.review_checkpoints,
                 "revision_actions": self.app.revision_actions,
             }
         )
         screenshot = self.capture(f"review_{self.app.review_checkpoints}")
+        self.events[-1]["screenshot"] = str(screenshot)
+        self._flush_log()
+        return screenshot
+
+    def verify_findings(
+        self,
+        assessment: str,
+        verifications: tuple[FindingVerification, ...],
+        semantic_assessment: SemanticAssessment | None = None,
+    ) -> Path:
+        """Record a screenshot-based reinspection after correction actions."""
+        reviews = [event for event in self.events if event.get("type") == "review"]
+        if not reviews:
+            raise RuntimeError("cannot verify findings before a review")
+        if not verifications:
+            raise ValueError("at least one finding verification is required")
+        if self.semantic_quality_required and semantic_assessment is None:
+            raise RuntimeError(
+                "semantic reinspection requires updated recognizability and prompt-fidelity assessment"
+            )
+        known_ids = {
+            str(finding["finding_id"])
+            for finding in reviews[-1].get("findings", [])
+        }
+        supplied_ids = {item.finding_id for item in verifications}
+        unknown = supplied_ids - known_ids
+        if unknown:
+            raise ValueError(
+                "verification references unknown finding(s): "
+                + ", ".join(sorted(unknown))
+            )
+        actionable = {
+            str(finding["finding_id"])
+            for finding in reviews[-1].get("findings", [])
+            if finding.get("priority") in {"high", "medium"}
+            and float(finding.get("confidence", 0.0)) >= 0.6
+        }
+        missing = actionable - supplied_ids
+        if missing:
+            raise ValueError(
+                "verification omitted actionable finding(s): "
+                + ", ".join(sorted(missing))
+            )
+        if actionable and not any(
+            int(event.get("sequence", -1)) > int(reviews[-1]["sequence"])
+            and bool(event.get("is_revision"))
+            for event in self.events
+        ):
+            raise RuntimeError(
+                "actionable findings must receive a visible revision before reinspection"
+            )
+        unresolved_findings = tuple(
+            ReviewFinding.from_dict(finding)
+            for finding in reviews[-1].get("findings", [])
+            if next(
+                (
+                    item.status != "resolved"
+                    for item in verifications
+                    if item.finding_id == finding["finding_id"]
+                ),
+                False,
+            )
+        )
+        self.app.set_review_findings(unresolved_findings)
+        self.app.set_summary(
+            goal="Verify that requested visual corrections worked.",
+            intended_action="Reinspect each targeted region in the rendered canvas.",
+            assessment=assessment,
+        )
+        self.events.append(
+            {
+                "sequence": len(self.events),
+                "type": "verification",
+                "assessment": assessment,
+                "review_sequence": reviews[-1]["sequence"],
+                "verifications": [item.to_dict() for item in verifications],
+                "semantic_assessment": (
+                    semantic_assessment.to_dict()
+                    if semantic_assessment is not None
+                    else None
+                ),
+                "drawing_actions": self.app.drawing_actions,
+                "review_checkpoints": self.app.review_checkpoints,
+                "revision_actions": self.app.revision_actions,
+            }
+        )
+        screenshot = self.capture(f"verification_{self.app.review_checkpoints}")
         self.events[-1]["screenshot"] = str(screenshot)
         self._flush_log()
         return screenshot
@@ -279,6 +384,8 @@ class PaintRun:
             "review_budget": self.review_budget,
             "revision_budget": self.revision_budget,
             "variant_index": self.variant_index,
+            "semantic_quality_required": self.semantic_quality_required,
+            "recognizability_threshold": self.recognizability_threshold,
             "events": self.events,
             "frame_index": self.frame_index,
             "app": self.app.to_payload(),
@@ -306,6 +413,12 @@ class PaintRun:
             detail_level=run.detail_level,
         )
         run.variant_index = int(payload.get("variant_index", 0))
+        run.semantic_quality_required = bool(
+            payload.get("semantic_quality_required", False)
+        )
+        run.recognizability_threshold = float(
+            payload.get("recognizability_threshold", 7.0)
+        )
         run.observation_dir = run.run_dir / "screenshots"
         run.frame_dir = run.run_dir / "frames"
         run.output_path = run.run_dir / "final.png"
@@ -327,25 +440,74 @@ class PaintRun:
         missing_passes = [
             name for name in self.policy.required_passes if name not in completed_passes
         ]
-        latest_high_sequence = max(
-            (
-                int(event["sequence"])
-                for event in self.events
-                if event.get("type") == "review"
-                and any(
-                    finding.get("priority") == "high"
-                    and float(finding.get("confidence", 0)) >= 0.6
-                    for finding in event.get("findings", [])
-                )
-            ),
-            default=-1,
-        )
-        has_later_revision = any(
-            int(event.get("sequence", -1)) > latest_high_sequence
-            and bool(event.get("is_revision"))
+        reviews = [event for event in self.events if event.get("type") == "review"]
+        latest_review = reviews[-1] if reviews else None
+        latest_high_ids = {
+            str(finding["finding_id"])
+            for finding in (latest_review or {}).get("findings", [])
+            if finding.get("priority") == "high"
+            and float(finding.get("confidence", 0)) >= 0.6
+        }
+        verifications = [
+            event
             for event in self.events
+            if event.get("type") == "verification"
+            and latest_review is not None
+            and int(event.get("review_sequence", -1))
+            == int(latest_review["sequence"])
+        ]
+        verified_status = {
+            str(item["finding_id"]): str(item["status"])
+            for event in verifications
+            for item in event.get("verifications", [])
+        }
+        unresolved_high_ids = {
+            identifier
+            for identifier in latest_high_ids
+            if verified_status.get(identifier) != "resolved"
+        }
+        if not self.semantic_quality_required and latest_high_ids:
+            latest_high_sequence = int(latest_review["sequence"])  # type: ignore[index]
+            has_later_revision = any(
+                int(event.get("sequence", -1)) > latest_high_sequence
+                and bool(event.get("is_revision"))
+                for event in self.events
+            )
+            unresolved_high_ids = set() if has_later_revision else latest_high_ids
+        semantic_reviews_complete = (
+            not self.semantic_quality_required
+            or (
+                len(reviews) >= self.review_budget
+                and all(event.get("semantic_assessment") for event in reviews)
+            )
         )
-        unresolved_high = latest_high_sequence >= 0 and not has_later_revision
+        semantic = (
+            verifications[-1].get("semantic_assessment")
+            if verifications and verifications[-1].get("semantic_assessment")
+            else latest_review.get("semantic_assessment")
+            if latest_review is not None
+            else None
+        )
+        recognizable = (
+            not self.semantic_quality_required
+            or (
+                bool(semantic)
+                and bool(semantic.get("recognizable_without_prompt"))
+                and float(semantic.get("recognizability_score", 0.0))
+                >= self.recognizability_threshold
+            )
+        )
+        actionable_ids = {
+            str(finding["finding_id"])
+            for finding in (latest_review or {}).get("findings", [])
+            if finding.get("priority") in {"high", "medium"}
+            and float(finding.get("confidence", 0.0)) >= 0.6
+        }
+        reinspection_complete = (
+            not self.semantic_quality_required
+            or not actionable_ids
+            or actionable_ids.issubset(verified_status)
+        )
         reference_shortfall = max(
             0,
             self.policy.reference_minimum - len(self.app.references),
@@ -354,8 +516,11 @@ class PaintRun:
             "minimum_actions": self.app.drawing_actions >= self.minimum_actions,
             "reviews_complete": self.app.review_checkpoints >= self.review_budget,
             "detail_passes_complete": not missing_passes,
-            "high_findings_addressed": not unresolved_high,
+            "high_findings_addressed": not unresolved_high_ids,
             "references_complete": reference_shortfall == 0,
+            "semantic_reviews_complete": semantic_reviews_complete,
+            "recognizability_gate": recognizable,
+            "reinspection_complete": reinspection_complete,
         }
         return {
             "ready": all(checks.values()),
@@ -366,7 +531,12 @@ class PaintRun:
             "maximum_actions": self.action_budget,
             "missing_passes": missing_passes,
             "reference_shortfall": reference_shortfall,
-            "unresolved_high_finding": unresolved_high,
+            "unresolved_high_finding": bool(unresolved_high_ids),
+            "unresolved_high_finding_ids": sorted(unresolved_high_ids),
+            "recognizability_threshold": self.recognizability_threshold,
+            "latest_recognizability_score": (
+                float(semantic["recognizability_score"]) if semantic else None
+            ),
         }
 
     def assert_save_ready(self) -> None:
@@ -400,6 +570,18 @@ class PaintRun:
                     "",
                 ]
             )
+            semantic = event.get("semantic_assessment")
+            if semantic:
+                lines.extend(
+                    [
+                        f"- **Recognizability:** {semantic['recognizability_score']:.1f}/10",
+                        f"- **Recognizable without prompt:** "
+                        f"{'yes' if semantic['recognizable_without_prompt'] else 'no'}",
+                        f"- **Prompt fidelity:** {semantic['prompt_fidelity_score']:.1f}/10",
+                        f"- **Semantic assessment:** {semantic['summary']}",
+                        "",
+                    ]
+                )
             for finding in event.get("findings", []):
                 lines.extend(
                     [
@@ -420,6 +602,46 @@ class PaintRun:
                 lines.extend(
                     [f"Review screenshot: [{relative}]({relative})", ""]
                 )
+            matching_verifications = [
+                verification
+                for verification in self.events
+                if verification.get("type") == "verification"
+                and int(verification.get("review_sequence", -1))
+                == int(event["sequence"])
+            ]
+            for verification in matching_verifications:
+                lines.extend(["### Reinspection", "", str(verification["assessment"]), ""])
+                semantic = verification.get("semantic_assessment")
+                if semantic:
+                    lines.extend(
+                        [
+                            f"- **Updated recognizability:** "
+                            f"{semantic['recognizability_score']:.1f}/10",
+                            f"- **Recognizable without prompt:** "
+                            f"{'yes' if semantic['recognizable_without_prompt'] else 'no'}",
+                            f"- **Updated prompt fidelity:** "
+                            f"{semantic['prompt_fidelity_score']:.1f}/10",
+                            f"- **Semantic reassessment:** {semantic['summary']}",
+                            "",
+                        ]
+                    )
+                for item in verification.get("verifications", []):
+                    lines.append(
+                        f"- **{item['finding_id']} — {item['status'].upper()}:** "
+                        f"{item['evidence']}"
+                        + (
+                            f" Remaining issue: {item['remaining_issue']}"
+                            if item.get("remaining_issue")
+                            else ""
+                        )
+                    )
+                if verification.get("screenshot"):
+                    relative = self._relative_artifact(
+                        Path(verification["screenshot"])
+                    )
+                    lines.extend(
+                        ["", f"Verification screenshot: [{relative}]({relative})", ""]
+                    )
 
         last_review_sequence = max(
             (event["sequence"] for event in reviews),

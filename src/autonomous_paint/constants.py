@@ -19,7 +19,16 @@ ACCENT = (94, 234, 212)
 SELECTED = (52, 211, 153)
 BUTTON_BORDER = (73, 88, 116)
 
-TOOLS = ("brush", "line", "rectangle", "ellipse", "fill", "eyedropper")
+TOOLS = (
+    "brush",
+    "line",
+    "rectangle",
+    "ellipse",
+    "curve",
+    "edit",
+    "fill",
+    "eyedropper",
+)
 STYLE_CONTROLS = ("outline", "filled", "both")
 SIZE_CONTROLS = ("size_down", "size_up")
 UTILITY_CONTROLS = ("undo", "clear", "refs", "save")
@@ -32,6 +41,8 @@ TOOL_MARKERS = OrderedDict(
         ("line", (120, 190, 255)),
         ("rectangle", (180, 120, 255)),
         ("ellipse", (255, 170, 70)),
+        ("curve", (70, 215, 255)),
+        ("edit", (255, 125, 210)),
         ("fill", (80, 230, 170)),
         ("eyedropper", (238, 140, 255)),
         ("outline", (255, 150, 190)),

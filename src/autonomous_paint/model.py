@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import copy
 from io import BytesIO
+import math
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -34,9 +36,11 @@ class CanvasModel:
                 "name": "Background",
                 "visible": True,
                 "image": Image.new("RGBA", (width, height), (*background, 255)),
+                "objects": [],
             }
         ]
         self.active_layer = 0
+        self._next_object_id = 1
         self._history: list[list[dict[str, object]]] = []
 
     @property
@@ -46,7 +50,7 @@ class CanvasModel:
             if layer["visible"]:
                 composite = Image.alpha_composite(
                     composite,
-                    layer["image"],  # type: ignore[arg-type]
+                    self._render_layer(layer),
                 )
         return composite.convert("RGB")
 
@@ -57,6 +61,7 @@ class CanvasModel:
                 "name": "Background",
                 "visible": True,
                 "image": value.convert("RGBA"),
+                "objects": [],
             }
         ]
         self.active_layer = 0
@@ -65,6 +70,10 @@ class CanvasModel:
     def layer_names(self) -> tuple[str, ...]:
         return tuple(str(layer["name"]) for layer in self._layers)
 
+    @property
+    def layer_visibility(self) -> tuple[bool, ...]:
+        return tuple(bool(layer["visible"]) for layer in self._layers)
+
     def add_layer(self, name: str | None = None) -> int:
         self._remember()
         self._layers.append(
@@ -72,6 +81,7 @@ class CanvasModel:
                 "name": name or f"Layer {len(self._layers)}",
                 "visible": True,
                 "image": Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0)),
+                "objects": [],
             }
         )
         self.active_layer = len(self._layers) - 1
@@ -88,6 +98,28 @@ class CanvasModel:
         self._remember()
         self._layers[index]["visible"] = bool(visible)
 
+    def move_layer(self, index: int, offset: int) -> int:
+        """Move a layer in the compositing order and return its new index."""
+        if not 0 <= index < len(self._layers):
+            raise IndexError("layer index out of range")
+        destination = min(len(self._layers) - 1, max(0, index + int(offset)))
+        if destination == index:
+            return index
+        self._remember()
+        layer = self._layers.pop(index)
+        self._layers.insert(destination, layer)
+        self.active_layer = destination
+        return destination
+
+    def rename_layer(self, index: int, name: str) -> None:
+        if not 0 <= index < len(self._layers):
+            raise IndexError("layer index out of range")
+        cleaned = name.strip()
+        if not cleaned:
+            raise ValueError("layer name cannot be empty")
+        self._remember()
+        self._layers[index]["name"] = cleaned[:40]
+
     def remove_layer(self, index: int | None = None) -> bool:
         if len(self._layers) == 1:
             return False
@@ -103,6 +135,109 @@ class CanvasModel:
         composite = self.image
         self._remember()
         self.image = composite
+
+    @property
+    def curve_objects(self) -> tuple[dict[str, object], ...]:
+        """Return safe copies of persistent editable curve objects."""
+        values: list[dict[str, object]] = []
+        for layer_index, layer in enumerate(self._layers):
+            for item in layer.get("objects", []):  # type: ignore[union-attr]
+                if item.get("type") == "curve":
+                    value = copy.deepcopy(item)
+                    value["layer_index"] = layer_index
+                    values.append(value)
+        return tuple(values)
+
+    def add_curve_object(
+        self,
+        start: Point,
+        control: Point,
+        end: Point,
+        colour: Colour,
+        size: int = 4,
+    ) -> str:
+        """Add a persistent quadratic curve that can be reshaped later."""
+        self._remember()
+        identifier = f"curve-{self._next_object_id}"
+        self._next_object_id += 1
+        objects = self._layers[self.active_layer].setdefault("objects", [])
+        objects.append(  # type: ignore[union-attr]
+            {
+                "id": identifier,
+                "type": "curve",
+                "points": [
+                    list(self._point(start)),
+                    list(self._point(control)),
+                    list(self._point(end)),
+                ],
+                "colour": list(colour),
+                "size": max(1, int(size)),
+            }
+        )
+        return identifier
+
+    def edit_curve_point(
+        self,
+        object_id: str,
+        point_index: int,
+        point: Point,
+    ) -> None:
+        """Move one anchor/control point on a persistent curve."""
+        if point_index not in {0, 1, 2}:
+            raise IndexError("curve point index must be zero, one, or two")
+        item = self._find_curve(object_id)
+        self._remember()
+        item["points"][point_index] = list(self._point(point))  # type: ignore[index]
+
+    def remove_curve_object(self, object_id: str) -> bool:
+        for layer in self._layers:
+            objects = layer.get("objects", [])
+            for index, item in enumerate(objects):  # type: ignore[arg-type]
+                if item.get("id") == object_id:
+                    self._remember()
+                    del objects[index]  # type: ignore[index]
+                    return True
+        return False
+
+    def nearest_curve(
+        self,
+        point: Point,
+        maximum_distance: float = 24.0,
+    ) -> str | None:
+        """Find the nearest visible curve using sampled rendered geometry."""
+        target = self._point(point)
+        best: tuple[float, str] | None = None
+        for layer in self._layers:
+            if not layer["visible"]:
+                continue
+            for item in layer.get("objects", []):  # type: ignore[union-attr]
+                if item.get("type") != "curve":
+                    continue
+                distance = min(
+                    math.dist(target, sample)
+                    for sample in self._curve_points(item, 40)
+                )
+                identifier = str(item["id"])
+                if distance <= maximum_distance and (
+                    best is None or distance < best[0]
+                ):
+                    best = (distance, identifier)
+        return best[1] if best else None
+
+    def nearest_curve_point(self, object_id: str, point: Point) -> int:
+        item = self._find_curve(object_id)
+        target = self._point(point)
+        return min(
+            range(3),
+            key=lambda index: math.dist(target, item["points"][index]),  # type: ignore[index]
+        )
+
+    def curve_points(self, object_id: str) -> tuple[Point, Point, Point]:
+        item = self._find_curve(object_id)
+        return tuple(
+            (int(point[0]), int(point[1]))
+            for point in item["points"]  # type: ignore[union-attr]
+        )  # type: ignore[return-value]
 
     def _remember(self) -> None:
         self._history.append(self._copy_layers())
@@ -291,6 +426,7 @@ class CanvasModel:
                     (self.width, self.height),
                     (*self.background, 255),
                 ),
+                "objects": [],
             }
         ]
         self.active_layer = 0
@@ -327,6 +463,7 @@ class CanvasModel:
                         "name": layer["name"],
                         "visible": layer["visible"],
                         "image": self._encode(layer["image"]),  # type: ignore[arg-type]
+                        "objects": copy.deepcopy(layer.get("objects", [])),
                     }
                     for layer in layers
                 ]
@@ -337,10 +474,12 @@ class CanvasModel:
                     "name": layer["name"],
                     "visible": layer["visible"],
                     "image": self._encode(layer["image"]),  # type: ignore[arg-type]
+                    "objects": copy.deepcopy(layer.get("objects", [])),
                 }
                 for layer in self._layers
             ],
             "active_layer": self.active_layer,
+            "next_object_id": self._next_object_id,
         }
 
     @classmethod
@@ -358,6 +497,7 @@ class CanvasModel:
                     "name": str(value["name"]),
                     "visible": bool(value["visible"]),
                     "image": cls._decode(str(value["image"])).convert("RGBA"),
+                    "objects": copy.deepcopy(value.get("objects", [])),
                 }
                 for value in layers
             ]
@@ -365,6 +505,7 @@ class CanvasModel:
                 int(payload.get("active_layer", 0)),
                 len(model._layers) - 1,
             )
+            model._next_object_id = int(payload.get("next_object_id", 1))
         else:
             model.image = cls._decode(str(payload["image"]))
         layer_history = payload.get("layer_history")
@@ -375,6 +516,7 @@ class CanvasModel:
                         "name": str(value["name"]),
                         "visible": bool(value["visible"]),
                         "image": cls._decode(str(value["image"])).convert("RGBA"),
+                        "objects": copy.deepcopy(value.get("objects", [])),
                     }
                     for value in snapshot
                 ]
@@ -387,6 +529,7 @@ class CanvasModel:
                         "name": "Background",
                         "visible": True,
                         "image": cls._decode(str(value)).convert("RGBA"),
+                        "objects": [],
                     }
                 ]
                 for value in payload.get("history", [])  # type: ignore[union-attr]
@@ -402,6 +545,7 @@ class CanvasModel:
                 "name": layer["name"],
                 "visible": layer["visible"],
                 "image": layer["image"].copy(),  # type: ignore[union-attr]
+                "objects": copy.deepcopy(layer.get("objects", [])),
             }
             for layer in self._layers
         ]
@@ -412,9 +556,54 @@ class CanvasModel:
             if layer["visible"]:
                 composite = Image.alpha_composite(
                     composite,
-                    layer["image"],  # type: ignore[arg-type]
+                    self._render_layer(layer),
                 )
         return composite.convert("RGB")
+
+    def _render_layer(self, layer: dict[str, object]) -> Image.Image:
+        rendered = layer["image"].copy()  # type: ignore[union-attr]
+        draw = ImageDraw.Draw(rendered)
+        for item in layer.get("objects", []):  # type: ignore[union-attr]
+            if item.get("type") != "curve":
+                continue
+            points = self._curve_points(item, 48)
+            colour = tuple(int(value) for value in item["colour"])
+            size = max(1, int(item.get("size", 4)))
+            draw.line(points, fill=(*colour, 255), width=size, joint="curve")
+        return rendered
+
+    def _find_curve(self, object_id: str) -> dict[str, object]:
+        for layer in self._layers:
+            for item in layer.get("objects", []):  # type: ignore[union-attr]
+                if item.get("type") == "curve" and item.get("id") == object_id:
+                    return item
+        raise KeyError(f"curve object does not exist: {object_id}")
+
+    @staticmethod
+    def _curve_points(
+        item: dict[str, object],
+        steps: int,
+    ) -> list[Point]:
+        start, control, end = item["points"]  # type: ignore[misc]
+        points: list[Point] = []
+        for index in range(steps + 1):
+            t = index / steps
+            one_minus = 1 - t
+            points.append(
+                (
+                    round(
+                        one_minus * one_minus * start[0]
+                        + 2 * one_minus * t * control[0]
+                        + t * t * end[0]
+                    ),
+                    round(
+                        one_minus * one_minus * start[1]
+                        + 2 * one_minus * t * control[1]
+                        + t * t * end[1]
+                    ),
+                )
+            )
+        return points
 
     def _normalized_box(self, start: Point, end: Point) -> tuple[int, int, int, int]:
         x1, y1 = self._point(start)
