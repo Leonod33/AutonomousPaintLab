@@ -78,6 +78,17 @@ class CanvasModelTests(unittest.TestCase):
         model.set_layer_visible(2, False)
         self.assertFalse(model.layer_visibility[2])
 
+    def test_transparent_layer_survives_session_round_trip(self) -> None:
+        model = CanvasModel(40, 30)
+        model.linear_gradient((0, 0), (39, 0), (10, 20, 30), (90, 100, 110))
+        underlying = model.image.tobytes()
+        model.add_layer("Subject")
+        restored = CanvasModel.from_payload(model.to_payload())
+        self.assertEqual(underlying, restored.image.tobytes())
+        restored.rectangle((10, 8), (25, 22), (200, 100, 50), filled=True)
+        self.assertEqual((10, 20, 30), restored.image.getpixel((0, 0)))
+        self.assertEqual((200, 100, 50), restored.image.getpixel((15, 15)))
+
     def test_directional_gradient_uses_both_colours_and_is_undoable(self) -> None:
         model = CanvasModel(60, 30)
         original = model.image.tobytes()
@@ -109,6 +120,17 @@ class CanvasModelTests(unittest.TestCase):
         self.assertNotEqual(model.background, model.image.getpixel((89, 20)))
         self.assertTrue(model.undo())
         self.assertEqual(baseline, model.image.tobytes())
+
+    def test_smudge_blends_along_path_without_copying_endpoint_square(self) -> None:
+        model = CanvasModel(100, 60)
+        model.rectangle((40, 5), (55, 55), (245, 245, 220), filled=True)
+        before = model.image.tobytes()
+        model.smudge((47, 15), (52, 48), 10)
+        self.assertNotEqual(before, model.image.tobytes())
+        self.assertNotEqual(model.background, model.image.getpixel((39, 30)))
+        self.assertEqual(model.background, model.image.getpixel((80, 30)))
+        self.assertTrue(model.undo())
+        self.assertEqual(before, model.image.tobytes())
 
 
 if __name__ == "__main__":
