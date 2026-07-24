@@ -25,12 +25,20 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=41)
     parser.add_argument("--run-dir", type=Path, default=PROJECT / "runs" / "pixel-robot")
     parser.add_argument(
-        "--action-budget", "--actions", dest="action_budget", type=int, default=100
+        "--action-budget", "--actions", "--max-actions",
+        dest="action_budget", type=int, default=100
+    )
+    parser.add_argument("--min-actions", type=int)
+    parser.add_argument("--target-actions", type=int)
+    parser.add_argument(
+        "--detail-level",
+        choices=("draft", "standard", "high", "ultra"),
+        default="standard",
     )
     parser.add_argument(
         "--review-budget", "--revisions", dest="review_budget", type=int, default=3
     )
-    parser.add_argument("--revision-actions", dest="revision_budget", type=int, default=3)
+    parser.add_argument("--revision-actions", dest="revision_budget", type=int)
     parser.add_argument("--references", type=Path)
     arguments = parser.parse_args()
     result = run_screenshot_agent(
@@ -41,6 +49,9 @@ def main() -> int:
         review_budget=arguments.review_budget,
         reference_manifest=arguments.references,
         revision_budget=arguments.revision_budget,
+        min_actions=arguments.min_actions,
+        target_actions=arguments.target_actions,
+        detail_level=arguments.detail_level,
     )
     print(json.dumps(result, indent=2))
     return 0

@@ -6,6 +6,7 @@ from autonomous_paint.app import PaintApplication
 from autonomous_paint.plans import make_plan
 from autonomous_paint.recording import save_png
 from autonomous_paint.tournament import (
+    build_diversity_contracts,
     build_rubric,
     derive_candidate_seeds,
     score_candidate,
@@ -18,8 +19,22 @@ class TournamentTests(unittest.TestCase):
         lighthouse = build_rubric("a lighthouse during a storm using four colours")
         self.assertEqual(100, sum(item.weight for item in robot))
         self.assertEqual(100, sum(item.weight for item in lighthouse))
-        self.assertIn("colour_rhythm", {item.key for item in robot})
-        self.assertIn("four_colour_discipline", {item.key for item in lighthouse})
+        self.assertEqual(
+            {
+                "prompt_fidelity",
+                "representation_accuracy",
+                "composition",
+                "depth_lighting",
+                "material_rendering",
+                "fine_detail",
+                "originality",
+            },
+            {item.key for item in robot},
+        )
+        self.assertNotEqual(
+            robot[0].visible_question,
+            lighthouse[0].visible_question,
+        )
 
     def test_candidate_seeds_are_reproducible_and_bounded(self) -> None:
         self.assertEqual((57, 1066, 2075), derive_candidate_seeds(57, 3))
@@ -55,9 +70,15 @@ class TournamentTests(unittest.TestCase):
             first = score_candidate("A", screenshot, final_png, app.prompt, rubric)
             second = score_candidate("A", screenshot, final_png, app.prompt, rubric)
             self.assertEqual(first, second)
-            self.assertEqual(5, len(first.criteria))
+            self.assertEqual(7, len(first.criteria))
             self.assertTrue(0 <= first.total_score <= 100)
             self.assertTrue(all(item.evidence for item in first.criteria))
+
+    def test_diversity_contracts_change_multiple_visible_dimensions(self) -> None:
+        contracts = build_diversity_contracts(3)
+        self.assertEqual(3, len(contracts))
+        for field in ("pose", "composition", "lighting", "rendering"):
+            self.assertEqual(3, len({contract[field] for contract in contracts}))
 
 
 if __name__ == "__main__":

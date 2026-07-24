@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageStat
 from .agents import run_screenshot_agent
 from .constants import PALETTE
 from .references import ReferenceCard, load_reference_manifest
-from .session import validate_budgets
+from .quality import resolve_budget_policy
 from .vision import locate_interface
 
 
@@ -50,104 +50,62 @@ class CandidateEvaluation:
 
 
 def build_rubric(prompt: str) -> tuple[RubricCriterion, ...]:
-    """Create a compact prompt-specific rubric whose weights total 100."""
+    """Create a detail-sensitive prompt rubric whose weights total 100."""
     normalized = prompt.lower()
-    if "robot" in normalized:
-        return (
-            RubricCriterion(
-                "prompt_fidelity",
-                "Prompt fidelity",
-                30,
-                "Are the robot, cheerful expression, and square-flower garden visibly present?",
-            ),
-            RubricCriterion(
-                "subject_clarity",
-                "Subject clarity",
-                25,
-                "Does the robot read clearly against the sky and ground?",
-            ),
-            RubricCriterion(
-                "composition",
-                "Composition",
-                20,
-                "Are the character and flower group balanced across the canvas?",
-            ),
-            RubricCriterion(
-                "colour_rhythm",
-                "Colour rhythm",
-                15,
-                "Do the accent colours create variety without losing cohesion?",
-            ),
-            RubricCriterion(
-                "focal_finish",
-                "Focal finish",
-                10,
-                "Does the face contain a distinct, finished focal detail?",
-            ),
-        )
-    if "lighthouse" in normalized:
-        return (
-            RubricCriterion(
-                "prompt_fidelity",
-                "Prompt fidelity",
-                30,
-                "Are the lighthouse, beacon, sea, and storm visibly present?",
-            ),
-            RubricCriterion(
-                "focal_clarity",
-                "Focal clarity",
-                25,
-                "Does the pale lighthouse separate strongly from the dark weather?",
-            ),
-            RubricCriterion(
-                "storm_energy",
-                "Storm energy",
-                20,
-                "Do visible rain and wave edges create movement?",
-            ),
-            RubricCriterion(
-                "four_colour_discipline",
-                "Four-colour discipline",
-                15,
-                "Does the image honour the requested four-colour limit?",
-            ),
-            RubricCriterion(
-                "focal_finish",
-                "Focal finish",
-                10,
-                "Do the beacon, window, and foreground accents feel complete?",
-            ),
-        )
+    if "guinea pig" in normalized or "cuddle cup" in normalized:
+        fidelity = "Are a cute resting guinea pig and an enclosing padded cuddle cup unmistakable?"
+        accuracy = "Are the rounded body, small ears, eye, muzzle, paws, and resting pose believable?"
+    elif "robot" in normalized:
+        fidelity = "Are the robot, cheerful expression, and square-flower garden unmistakable?"
+        accuracy = "Are the robot's head, torso, limbs, face, and gardening pose coherent?"
+    elif "lighthouse" in normalized:
+        fidelity = "Are the lighthouse, beacon, rough sea, and storm unmistakable?"
+        accuracy = "Are the tower, lantern room, roof, horizon, and wave scale structurally coherent?"
+    else:
+        fidelity = "Are every requested subject, action, setting, and named prop recognizable?"
+        accuracy = "Are the subject's proportions, pose, and relationships internally coherent?"
     return (
         RubricCriterion(
             "prompt_fidelity",
             "Prompt fidelity",
-            35,
-            "Are the requested subject and setting visibly recognizable?",
+            20,
+            fidelity,
         ),
         RubricCriterion(
-            "subject_clarity",
-            "Subject clarity",
-            25,
-            "Does the principal subject separate from its surroundings?",
+            "representation_accuracy",
+            "Representation accuracy",
+            20,
+            accuracy,
         ),
         RubricCriterion(
             "composition",
             "Composition",
-            20,
-            "Is the visible mass balanced across the canvas?",
+            15,
+            "Is the focal subject clearly placed with useful negative space and visual flow?",
         ),
         RubricCriterion(
-            "colour_rhythm",
-            "Colour rhythm",
-            10,
-            "Are colours varied but visually coherent?",
+            "depth_lighting",
+            "Depth and lighting",
+            15,
+            "Do overlap, cast shadows, highlights, and value separation create convincing depth?",
         ),
         RubricCriterion(
-            "focal_finish",
-            "Focal finish",
+            "material_rendering",
+            "Material rendering",
+            15,
+            "Do distinct surfaces—such as fur, fabric, metal, water, or foliage—read differently?",
+        ),
+        RubricCriterion(
+            "fine_detail",
+            "Fine detail",
             10,
-            "Is there a visibly deliberate focal detail?",
+            "Are small focal marks, edge variations, and secondary details deliberate and clean?",
+        ),
+        RubricCriterion(
+            "originality",
+            "Originality",
+            5,
+            "Does the candidate have a distinct pose, silhouette, colour decision, or rendering character?",
         ),
     )
 
@@ -156,6 +114,43 @@ def derive_candidate_seeds(base_seed: int, candidate_count: int) -> tuple[int, .
     if not 2 <= candidate_count <= 5:
         raise ValueError("variant tournaments require between two and five candidates")
     return tuple(base_seed + index * 1009 for index in range(candidate_count))
+
+
+def build_diversity_contracts(candidate_count: int) -> tuple[dict[str, str], ...]:
+    """Assign visible creative differences instead of relying on seed noise."""
+    contracts = (
+        {
+            "pose": "low resting pose, face turned toward the viewer",
+            "composition": "balanced central subject with generous context",
+            "lighting": "soft diffuse daylight",
+            "rendering": "clean rounded shapes with restrained texture",
+        },
+        {
+            "pose": "three-quarter pose with a stronger diagonal",
+            "composition": "off-centre crop and asymmetrical negative space",
+            "lighting": "warm side light with a cool shadow",
+            "rendering": "layered short texture marks",
+        },
+        {
+            "pose": "compact curled pose emphasizing enclosure",
+            "composition": "closer crop with the prop framing the subject",
+            "lighting": "bright rim light and deeper interior shadow",
+            "rendering": "graphic colour blocks plus fine focal detail",
+        },
+        {
+            "pose": "relaxed side profile",
+            "composition": "low horizon and broad foreground",
+            "lighting": "muted overcast values",
+            "rendering": "soft tonal masses with selective crisp edges",
+        },
+        {
+            "pose": "alert resting pose with visible paws",
+            "composition": "high viewpoint and elliptical framing",
+            "lighting": "warm ambient glow",
+            "rendering": "decorative seams and rhythmic marks",
+        },
+    )
+    return contracts[:candidate_count]
 
 
 def score_candidate(
@@ -174,7 +169,9 @@ def score_candidate(
         canvas = application.crop((x, y, x + width, y + height))
 
     normalized = prompt.lower()
-    if "robot" in normalized:
+    if "guinea pig" in normalized or "cuddle cup" in normalized:
+        raw_scores = _score_guinea_pig(canvas)
+    elif "robot" in normalized:
         raw_scores = _score_robot(canvas)
     elif "lighthouse" in normalized:
         raw_scores = _score_lighthouse(canvas)
@@ -209,31 +206,51 @@ def run_variant_tournament(
     action_budget: int = 100,
     review_budget: int = 3,
     reference_manifest: Path | None = None,
-    revision_budget: int = 3,
+    revision_budget: int | None = None,
+    min_actions: int | None = None,
+    target_actions: int | None = None,
+    max_actions: int | None = None,
+    detail_level: str = "standard",
+    finalist_count: int = 2,
 ) -> dict[str, str]:
-    """Create, judge, and preserve a small set of screenshot-only variants."""
-    validate_budgets(action_budget, review_budget, revision_budget)
+    """Qualify thumbnails, then rerun the best concepts at the full detail target."""
+    policy = resolve_budget_policy(
+        action_budget=action_budget,
+        min_actions=min_actions,
+        target_actions=target_actions,
+        max_actions=max_actions,
+        review_budget=review_budget,
+        revision_budget=revision_budget,
+        detail_level=detail_level,
+    )
     seeds = derive_candidate_seeds(seed, candidate_count)
+    if not 1 <= finalist_count <= candidate_count:
+        raise ValueError("finalist count must be between one and candidate count")
     if run_dir.exists() and any(run_dir.iterdir()):
         raise FileExistsError(f"tournament directory is not empty: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     rubric = build_rubric(prompt)
     labels = tuple(chr(ord("A") + index) for index in range(candidate_count))
+    diversity_contracts = build_diversity_contracts(candidate_count)
     preserved_manifest = _preserve_references(reference_manifest, run_dir)
+    qualifier_evaluations: list[CandidateEvaluation] = []
     evaluations: list[CandidateEvaluation] = []
     candidate_artifacts: dict[str, dict[str, str]] = {}
 
     for variant_index, (label, candidate_seed) in enumerate(zip(labels, seeds)):
-        candidate_dir = run_dir / f"candidate-{label.lower()}"
+        candidate_dir = run_dir / "qualifiers" / f"candidate-{label.lower()}"
         artifacts = run_screenshot_agent(
             prompt,
             candidate_seed,
             candidate_dir,
-            action_budget=action_budget,
-            review_budget=review_budget,
+            action_budget=min(45, policy.maximum_actions),
+            review_budget=min(2, policy.review_checkpoints),
             reference_manifest=preserved_manifest,
             variant_index=variant_index,
-            revision_budget=revision_budget,
+            revision_budget=min(4, policy.revision_actions),
+            min_actions=min(20, policy.maximum_actions),
+            target_actions=min(35, policy.maximum_actions),
+            detail_level="draft",
         )
         final_screenshots = sorted(
             (candidate_dir / "screenshots").glob("*_final.png")
@@ -248,11 +265,55 @@ def run_variant_tournament(
             prompt,
             rubric,
         )
-        evaluations.append(evaluation)
+        qualifier_evaluations.append(evaluation)
         candidate_artifacts[label] = {
-            name: _relative(run_dir, Path(value))
+            f"qualifier_{name}": _relative(run_dir, Path(value))
             for name, value in artifacts.items()
         }
+
+    qualifier_ranked = sorted(
+        qualifier_evaluations,
+        key=lambda item: (-item.total_score, item.candidate_id),
+    )
+    finalist_ids = {
+        item.candidate_id for item in qualifier_ranked[:finalist_count]
+    }
+    for variant_index, (label, candidate_seed) in enumerate(zip(labels, seeds)):
+        if label not in finalist_ids:
+            continue
+        candidate_dir = run_dir / "finalists" / f"candidate-{label.lower()}"
+        artifacts = run_screenshot_agent(
+            prompt,
+            candidate_seed,
+            candidate_dir,
+            action_budget=policy.maximum_actions,
+            review_budget=policy.review_checkpoints,
+            reference_manifest=preserved_manifest,
+            variant_index=variant_index,
+            revision_budget=policy.revision_actions,
+            min_actions=policy.minimum_actions,
+            target_actions=policy.target_actions,
+            detail_level=policy.detail_level,
+        )
+        final_screenshots = sorted(
+            (candidate_dir / "screenshots").glob("*_final.png")
+        )
+        if not final_screenshots:
+            raise RuntimeError(f"finalist {label} has no final application screenshot")
+        evaluation = score_candidate(
+            label,
+            final_screenshots[-1],
+            Path(artifacts["final_png"]),
+            prompt,
+            rubric,
+        )
+        evaluations.append(evaluation)
+        candidate_artifacts[label].update(
+            {
+                f"finalist_{name}": _relative(run_dir, Path(value))
+                for name, value in artifacts.items()
+            }
+        )
 
     ranked = sorted(
         evaluations,
@@ -281,9 +342,13 @@ def run_variant_tournament(
         ranked,
         winner.candidate_id,
         decision,
-        action_budget,
-        review_budget,
-        revision_budget,
+        policy.minimum_actions,
+        policy.target_actions,
+        policy.maximum_actions,
+        policy.review_checkpoints,
+        policy.revision_actions,
+        qualifier_ranked,
+        diversity_contracts,
     )
     manifest = {
         "prompt": prompt,
@@ -294,10 +359,30 @@ def run_variant_tournament(
         "candidate_variants": {
             label: index for index, label in enumerate(labels)
         },
+        "diversity_contracts": {
+            label: contract
+            for label, contract in zip(labels, diversity_contracts)
+        },
         "candidate_count": candidate_count,
-        "action_budget_per_candidate": action_budget,
-        "review_budget_per_candidate": review_budget,
-        "revision_action_budget_per_candidate": revision_budget,
+        "tournament_stages": {
+            "qualification": {
+                "target_actions": min(35, policy.maximum_actions),
+                "maximum_actions": min(45, policy.maximum_actions),
+                "ranking": [item.candidate_id for item in qualifier_ranked],
+            },
+            "final": {
+                "minimum_actions": policy.minimum_actions,
+                "target_actions": policy.target_actions,
+                "maximum_actions": policy.maximum_actions,
+                "finalists": [item.candidate_id for item in evaluations],
+            },
+        },
+        "action_budget_per_finalist": policy.maximum_actions,
+        "minimum_actions_per_finalist": policy.minimum_actions,
+        "target_actions_per_finalist": policy.target_actions,
+        "review_budget_per_finalist": policy.review_checkpoints,
+        "revision_action_budget_per_finalist": policy.revision_actions,
+        "detail_level": policy.detail_level,
         "decision_source": "deterministic_complete_application_screenshot_judge",
         "judge_input": "final_complete_application_screenshot_only",
         "blind_labels": list(labels),
@@ -312,6 +397,14 @@ def run_variant_tournament(
                 "final_png": _relative(run_dir, Path(item.final_png)),
             }
             for item in ranked
+        ],
+        "qualification_evaluations": [
+            {
+                **item.to_dict(),
+                "screenshot": _relative(run_dir, Path(item.screenshot)),
+                "final_png": _relative(run_dir, Path(item.final_png)),
+            }
+            for item in qualifier_ranked
         ],
         "candidate_artifacts": candidate_artifacts,
     }
@@ -367,13 +460,14 @@ def _score_robot(canvas: Image.Image) -> dict[str, tuple[float, str]]:
         + 2.5 * min(1.0, face_yellow / 0.012)
         + 4.0 * min(1.0, face_contrast / 82)
     )
+    edges = _edge_density(canvas)
     return {
         "prompt_fidelity": (
             prompt_score,
             f"Robot region is {subject_ratio:.0%} non-background; the square-flower "
             f"band is {flower_ratio:.0%} non-background.",
         ),
-        "subject_clarity": (
+        "representation_accuracy": (
             clarity_score,
             f"Robot-region contrast is {subject_contrast:.0f}/128 with "
             f"{ink_ratio:.1%} dark outline pixels.",
@@ -383,15 +477,25 @@ def _score_robot(canvas: Image.Image) -> dict[str, tuple[float, str]]:
             f"Foreground centre is ({centroid_x:.0%}, {centroid_y:.0%}) with "
             f"{coverage:.0%} canvas coverage.",
         ),
-        "colour_rhythm": (
-            colour_score,
-            f"{accent_count}/4 accent families are visible; normalized accent "
-            f"entropy is {accent_entropy:.2f}.",
+        "depth_lighting": (
+            _clamp((clarity_score + composition_score) / 2),
+            f"Value separation is {subject_contrast:.0f}/128 and the foreground "
+            f"centre remains at ({centroid_x:.0%}, {centroid_y:.0%}).",
         ),
-        "focal_finish": (
+        "material_rendering": (
+            _clamp((colour_score + edges * 80) / 2),
+            f"{accent_count}/4 material accents are visible with {edges:.1%} "
+            "whole-canvas edge density.",
+        ),
+        "fine_detail": (
             finish_score,
             f"Face contrast is {face_contrast:.0f}/128; white eye pixels and a "
             f"yellow focal accent are both visibly present.",
+        ),
+        "originality": (
+            _clamp(4 + 6 * accent_entropy),
+            f"Normalized accent entropy is {accent_entropy:.2f}, reflecting the "
+            "candidate's distinct colour distribution.",
         ),
     }
 
@@ -432,24 +536,111 @@ def _score_lighthouse(canvas: Image.Image) -> dict[str, tuple[float, str]]:
             f"The tower region is {tower_light:.0%} white/yellow and the weather "
             f"field is {environment_dark:.0%} navy/storm grey.",
         ),
-        "focal_clarity": (
+        "representation_accuracy": (
             clarity_score,
             f"Tower-region contrast is {tower_contrast:.0f}/128 with "
             f"{tower_light:.0%} light focal pixels.",
         ),
-        "storm_energy": (
+        "depth_lighting": (
+            clarity_score,
+            f"Tower contrast is {tower_contrast:.0f}/128 and light focal pixels "
+            f"cover {tower_light:.0%} of the tower region.",
+        ),
+        "material_rendering": (
             storm_score,
-            f"Visible edge density is {sky_edges:.1%} in the sky and "
-            f"{sea_edges:.1%} in the sea.",
+            f"Edge density differs across storm sky ({sky_edges:.1%}) and "
+            f"rough sea ({sea_edges:.1%}).",
         ),
-        "four_colour_discipline": (
-            colour_score,
-            f"{palette_count} Paint palette colours appear above the visibility threshold.",
-        ),
-        "focal_finish": (
+        "fine_detail": (
             finish_score,
             f"Foreground centre is ({centroid_x:.0%}, {centroid_y:.0%}); "
             f"light accents cover {coverage:.0%} of the canvas.",
+        ),
+        "originality": (
+            colour_score,
+            f"{palette_count} visible palette colours define this candidate's "
+            "disciplined storm treatment.",
+        ),
+    }
+
+
+def _score_guinea_pig(canvas: Image.Image) -> dict[str, tuple[float, str]]:
+    animal = _crop(canvas, (150, 160, 440, 310))
+    face = _crop(canvas, (130, 185, 220, 210))
+    cup = _crop(canvas, (75, 245, 620, 305))
+    fur_ratio = _colour_ratio(animal, {"tan", "brown", "cream", "white"})
+    cup_ratio = _colour_ratio(cup, {"teal", "violet", "coral", "navy", "green"})
+    eye_ratio = _colour_ratio(face, {"ink", "white"})
+    pink_ratio = _colour_ratio(face, {"coral", "pink"})
+    animal_contrast = _contrast(animal)
+    cup_edges = _edge_density(cup)
+    fur_edges = _edge_density(animal)
+    centroid_x, centroid_y, coverage = _foreground_geometry(canvas, {"cream"})
+    colours = _present_palette_count(canvas)
+    fidelity = _clamp(
+        4.5 * min(1.0, fur_ratio / 0.45)
+        + 3.5 * min(1.0, cup_ratio / 0.35)
+        + 2.0 * min(1.0, eye_ratio / 0.025)
+    )
+    accuracy = _clamp(
+        4 * min(1.0, eye_ratio / 0.035)
+        + 2 * min(1.0, pink_ratio / 0.02)
+        + 4 * min(1.0, fur_ratio / 0.50)
+    )
+    composition = _clamp(
+        10
+        - abs(centroid_x - 0.50) * 16
+        - abs(centroid_y - 0.57) * 12
+        - abs(coverage - 0.35) * 12
+    )
+    depth = _clamp(
+        6 * min(1.0, animal_contrast / 65)
+        + 4 * min(1.0, cup_edges / 0.08)
+    )
+    material = _clamp(
+        5 * min(1.0, fur_edges / 0.09)
+        + 5 * min(1.0, cup_edges / 0.08)
+    )
+    detail = _clamp(
+        4 * min(1.0, eye_ratio / 0.04)
+        + 3 * min(1.0, fur_edges / 0.10)
+        + 3 * min(1.0, cup_edges / 0.09)
+    )
+    originality = _clamp(3 + min(7, colours * 0.75))
+    return {
+        "prompt_fidelity": (
+            fidelity,
+            f"The animal region is {fur_ratio:.0%} fur colours and the cuddle-cup "
+            f"region is {cup_ratio:.0%} padded accent colour.",
+        ),
+        "representation_accuracy": (
+            accuracy,
+            f"The face contains {eye_ratio:.1%} eye/outline pixels and "
+            f"{pink_ratio:.1%} warm muzzle/ear pixels.",
+        ),
+        "composition": (
+            composition,
+            f"Foreground centre is ({centroid_x:.0%}, {centroid_y:.0%}) with "
+            f"{coverage:.0%} canvas coverage.",
+        ),
+        "depth_lighting": (
+            depth,
+            f"Animal contrast is {animal_contrast:.0f}/128 and cup edge density "
+            f"is {cup_edges:.1%}.",
+        ),
+        "material_rendering": (
+            material,
+            f"Fur edge density is {fur_edges:.1%}, compared with {cup_edges:.1%} "
+            "in the fabric region.",
+        ),
+        "fine_detail": (
+            detail,
+            f"Eye marks, fur edges, and fabric seams are independently visible "
+            f"at densities of {eye_ratio:.1%}, {fur_edges:.1%}, and {cup_edges:.1%}.",
+        ),
+        "originality": (
+            originality,
+            f"{colours} visible palette families define the candidate's treatment.",
         ),
     }
 
@@ -467,7 +658,7 @@ def _score_generic(canvas: Image.Image) -> dict[str, tuple[float, str]]:
             _clamp(4 + colours * 0.7),
             f"{colours} visible palette colours establish differentiated forms.",
         ),
-        "subject_clarity": (
+        "representation_accuracy": (
             _clamp(contrast / 10),
             f"Whole-canvas tonal contrast is {contrast:.0f}/128.",
         ),
@@ -476,13 +667,23 @@ def _score_generic(canvas: Image.Image) -> dict[str, tuple[float, str]]:
             f"Visible centre is ({centroid_x:.0%}, {centroid_y:.0%}) with "
             f"{coverage:.0%} coverage.",
         ),
-        "colour_rhythm": (
-            _clamp(colours * 1.2),
-            f"{colours} palette colours pass the visibility threshold.",
+        "depth_lighting": (
+            _clamp((contrast / 12) + coverage * 4),
+            f"Tonal contrast is {contrast:.0f}/128 with {coverage:.0%} "
+            "foreground coverage.",
         ),
-        "focal_finish": (
+        "material_rendering": (
+            _clamp(colours * 0.8 + edges * 45),
+            f"{colours} palette colours and {edges:.1%} edge density create "
+            "surface differentiation.",
+        ),
+        "fine_detail": (
             _clamp(edges * 100),
             f"Visible edge density is {edges:.1%}.",
+        ),
+        "originality": (
+            _clamp(3 + colours * 0.7),
+            f"{colours} visible palette families establish a distinct treatment.",
         ),
     }
 
@@ -554,9 +755,13 @@ def _write_report(
     ranked: list[CandidateEvaluation],
     winner_id: str,
     decision: str,
+    minimum_actions: int,
+    target_actions: int,
     action_budget: int,
     review_budget: int,
     revision_budget: int,
+    qualifier_ranked: list[CandidateEvaluation],
+    diversity_contracts: tuple[dict[str, str], ...],
 ) -> Path:
     lines = [
         "# Variant Tournament Report",
@@ -564,18 +769,46 @@ def _write_report(
         f"**Prompt:** {prompt}",
         f"**Base seed:** {base_seed}",
         f"**Candidate seeds:** {', '.join(str(seed) for seed in seeds)}",
-        f"**Per-candidate budgets:** {action_budget} drawing actions; "
+        f"**Finalist budgets:** {minimum_actions} minimum / {target_actions} target / "
+        f"{action_budget} maximum drawing actions; "
         f"{review_budget} review checkpoints; {revision_budget} correction actions",
         "**Judge input:** final complete-application screenshots only",
         "",
         "Candidate labels were assigned before judging. The scorer did not receive "
         "candidate seeds, canvas state, action logs, or review reports.",
         "",
-        "## Visible rubric",
+        "## Qualification",
         "",
-        "| Criterion | Weight | Visible question |",
-        "| --- | ---: | --- |",
+        "Every candidate first produced a bounded draft. The blind draft ranking was "
+        f"{', '.join(item.candidate_id for item in qualifier_ranked)}; only the selected "
+        "finalists were reproduced at the full detail target.",
+        "",
+        "| Candidate | Pose | Composition | Lighting | Rendering |",
+        "| --- | --- | --- | --- | --- |",
     ]
+    lines.extend(
+        "| "
+        + " | ".join(
+            (
+                chr(ord("A") + index),
+                contract["pose"],
+                contract["composition"],
+                contract["lighting"],
+                contract["rendering"],
+            )
+        )
+        + " |"
+        for index, contract in enumerate(diversity_contracts)
+    )
+    lines.extend(
+        [
+            "",
+            "## Visible rubric",
+            "",
+            "| Criterion | Weight | Visible question |",
+            "| --- | ---: | --- |",
+        ]
+    )
     lines.extend(
         f"| {item.label} | {item.weight}% | {item.visible_question} |"
         for item in rubric
@@ -618,10 +851,11 @@ def _write_report(
             "",
             "## Preservation",
             "",
-            "Every candidate directory retains its prompt, seed metadata, action log, "
+            "Every qualifier directory retains its prompt, seed metadata, action log, "
             "configured review checkpoints, complete-application screenshots, final PNG, "
-            "GIF, MP4, and review report. `winner.png` is a convenience copy; losing "
-            "variants are not deleted.",
+            "GIF, MP4, review report, and quality gates. Finalists retain a second full-"
+            "detail run. `winner.png` is a convenience copy; losing variants are not "
+            "deleted.",
             "",
         ]
     )

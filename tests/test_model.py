@@ -37,7 +37,21 @@ class CanvasModelTests(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertGreater(path.stat().st_size, 0)
 
+    def test_layers_and_advanced_primitives_are_reversible(self) -> None:
+        model = CanvasModel(80, 60)
+        baseline = model.image.tobytes()
+        layer = model.add_layer("Highlights")
+        self.assertEqual(("Background", "Highlights"), model.layer_names)
+        self.assertEqual(1, layer)
+        model.gradient((10, 20, 30), (80, 90, 100))
+        model.bezier((5, 50), (40, 5), (75, 50), (255, 255, 255), 3)
+        model.polygon([(10, 10), (35, 8), (20, 35)], (255, 0, 0), filled=True)
+        self.assertNotEqual(baseline, model.image.tobytes())
+        model.set_layer_visible(1, False)
+        self.assertEqual(baseline, model.image.tobytes())
+        self.assertTrue(model.undo())
+        self.assertNotEqual(baseline, model.image.tobytes())
+
 
 if __name__ == "__main__":
     unittest.main()
-

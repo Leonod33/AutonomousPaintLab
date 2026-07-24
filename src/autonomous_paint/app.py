@@ -28,6 +28,8 @@ from .constants import (
     PANEL,
     PANEL_LIGHT,
     SELECTED,
+    SIZE_CONTROLS,
+    STYLE_CONTROLS,
     TEXT,
     TOOL_MARKERS,
     TOOLS,
@@ -69,6 +71,9 @@ class PaintApplication:
         review_budget: int = 3,
         references: tuple[ReferenceCard, ...] = (),
         revision_budget: int = 3,
+        minimum_actions: int = 0,
+        target_actions: int | None = None,
+        detail_level: str = "standard",
     ) -> None:
         if action_budget < 1:
             raise ValueError("action budget must be positive")
@@ -76,6 +81,9 @@ class PaintApplication:
             raise ValueError("review budget must be positive")
         if revision_budget < 0:
             raise ValueError("revision action budget cannot be negative")
+        resolved_target = target_actions if target_actions is not None else action_budget
+        if not 0 <= minimum_actions <= resolved_target <= action_budget:
+            raise ValueError("actions must satisfy minimum <= target <= maximum")
         pygame.init()
         pygame.font.init()
         self.model = model or CanvasModel(*CANVAS_SIZE)
@@ -83,6 +91,9 @@ class PaintApplication:
         self.prompt = prompt
         self.seed = seed
         self.action_budget = action_budget
+        self.minimum_actions = minimum_actions
+        self.target_actions = resolved_target
+        self.detail_level = detail_level
         self.review_budget = review_budget
         self.revision_budget = revision_budget
         self.drawing_actions = 0
@@ -91,6 +102,10 @@ class PaintApplication:
         self.selected_tool = "brush"
         self.selected_colour = "ink"
         self.brush_size = 8
+        self.shape_mode = "outline"
+        self.custom_colour = (18, 23, 35)
+        self.recent_colours: list[tuple[int, int, int]] = []
+        self.magnifier_point: Point = (CANVAS_SIZE[0] // 2, CANVAS_SIZE[1] // 2)
         self.summary = VisibleSummary()
         self.references = references
         self.reference_board_open = False
@@ -104,22 +119,38 @@ class PaintApplication:
         self._title = pygame.font.Font(None, 34)
         self._tool_rects = self._build_tool_rects()
         self._palette_rects = self._build_palette_rects()
+        self._custom_colour_rect = pygame.Rect(824, 306, 74, 34)
+        self._recent_colour_rects = [
+            pygame.Rect(824 + index * 22, 344, 16, 14)
+            for index in range(6)
+        ]
+        self._layer_rects = {
+            "layer_prev": pygame.Rect(824, 124, 42, 28),
+            "layer_add": pygame.Rect(872, 124, 42, 28),
+            "layer_remove": pygame.Rect(920, 124, 42, 28),
+            "layer_next": pygame.Rect(968, 124, 42, 28),
+        }
 
     @staticmethod
     def _build_tool_rects() -> dict[str, pygame.Rect]:
         rects: dict[str, pygame.Rect] = {}
-        names = list(TOOLS) + list(UTILITY_CONTROLS)
+        names = (
+            list(TOOLS)
+            + list(STYLE_CONTROLS)
+            + list(SIZE_CONTROLS)
+            + list(UTILITY_CONTROLS)
+        )
         for index, name in enumerate(names):
-            rects[name] = pygame.Rect(20 + index * 84, 72, 76, 48)
+            rects[name] = pygame.Rect(20 + index * 80, 72, 72, 48)
         return rects
 
     @staticmethod
     def _build_palette_rects() -> dict[str, pygame.Rect]:
         rects: dict[str, pygame.Rect] = {}
         for index, name in enumerate(PALETTE):
-            column = index % 5
-            row = index // 5
-            rects[name] = pygame.Rect(824 + column * 72, 198 + row * 70, 52, 52)
+            column = index % 7
+            row = index // 7
+            rects[name] = pygame.Rect(824 + column * 54, 185 + row * 60, 42, 42)
         return rects
 
     @property
@@ -161,6 +192,13 @@ class PaintApplication:
                     self.selected_tool = name
                     self.summary.tool = name
                     return UIResult(True, control=name)
+                if name in STYLE_CONTROLS:
+                    self.shape_mode = name
+                    return UIResult(True, control=name)
+                if name in SIZE_CONTROLS:
+                    delta = -2 if name == "size_down" else 2
+                    self.brush_size = min(64, max(1, self.brush_size + delta))
+                    return UIResult(True, control=name)
                 if name == "undo":
                     return UIResult(self.model.undo(), control=name)
                 if name == "clear":
@@ -178,16 +216,42 @@ class PaintApplication:
         for name, rect in self._palette_rects.items():
             if rect.collidepoint(position):
                 self.selected_colour = name
+                self._remember_colour(PALETTE[name])
                 return UIResult(True, control=f"palette:{name}")
+        for name, rect in self._layer_rects.items():
+            if not rect.collidepoint(position):
+                continue
+            if name == "layer_add":
+                self.model.add_layer()
+            elif name == "layer_remove":
+                self.model.remove_layer()
+            elif name == "layer_prev":
+                self.model.select_layer(max(0, self.model.active_layer - 1))
+            elif name == "layer_next":
+                self.model.select_layer(
+                    min(len(self.model.layer_names) - 1, self.model.active_layer + 1)
+                )
+            return UIResult(True, control=name)
+        if self._custom_colour_rect.collidepoint(position):
+            self.selected_colour = "custom"
+            return UIResult(True, control="palette:custom")
+        for index, rect in enumerate(self._recent_colour_rects):
+            if rect.collidepoint(position) and index < len(self.recent_colours):
+                self.set_custom_colour(self.recent_colours[index])
+                return UIResult(True, control=f"recent:{index + 1}")
         if self.canvas_rect.collidepoint(position) and not self.reference_board_open:
             if not self._drawing_budget_available():
                 return UIResult(False, control="budget")
             local = self._local(position)
+            self.magnifier_point = local
+            if self.selected_tool == "eyedropper":
+                self.set_custom_colour(self.model.image.getpixel(local))
+                return UIResult(True, control="eyedropper:sample")
             if self.selected_tool == "fill":
-                self.model.fill(local, PALETTE[self.selected_colour])
+                self.model.fill(local, self._colour())
                 return UIResult(True, drawing_applied=True, control="canvas")
             if self.selected_tool == "brush":
-                self.model.brush([local], PALETTE[self.selected_colour], self.brush_size)
+                self.model.brush([local], self._colour(), self.brush_size)
                 return UIResult(True, drawing_applied=True, control="canvas")
         return UIResult(False)
 
@@ -202,7 +266,8 @@ class PaintApplication:
         )
         local_start = self._local(start)
         local_end = self._local(clipped_end)
-        colour = PALETTE[self.selected_colour]
+        self.magnifier_point = local_end
+        colour = self._colour()
         if self.selected_tool == "brush":
             path = [
                 (
@@ -215,20 +280,48 @@ class PaintApplication:
         elif self.selected_tool == "line":
             self.model.line(local_start, local_end, colour, self.brush_size)
         elif self.selected_tool == "rectangle":
-            self.model.rectangle(local_start, local_end, colour, self.brush_size)
+            self.model.rectangle(
+                local_start,
+                local_end,
+                colour,
+                self.brush_size,
+                filled=self.shape_mode in {"filled", "both"},
+            )
         elif self.selected_tool == "ellipse":
-            self.model.ellipse(local_start, local_end, colour, self.brush_size)
+            self.model.ellipse(
+                local_start,
+                local_end,
+                colour,
+                self.brush_size,
+                filled=self.shape_mode in {"filled", "both"},
+            )
         else:
             return self.click(start)
         return UIResult(True, drawing_applied=True, control="canvas")
+
+    def set_custom_colour(self, colour: tuple[int, int, int]) -> None:
+        self.custom_colour = tuple(min(255, max(0, int(channel))) for channel in colour)
+        self.selected_colour = "custom"
+        self._remember_colour(self.custom_colour)
+
+    def _colour(self) -> tuple[int, int, int]:
+        if self.selected_colour == "custom":
+            return self.custom_colour
+        return PALETTE[self.selected_colour]
+
+    def _remember_colour(self, colour: tuple[int, int, int]) -> None:
+        if colour in self.recent_colours:
+            self.recent_colours.remove(colour)
+        self.recent_colours.insert(0, colour)
+        del self.recent_colours[6:]
 
     def render(self) -> pygame.Surface:
         surface = pygame.Surface(WINDOW_SIZE)
         surface.fill(BACKGROUND)
         self._draw_header(surface)
-        self._draw_toolbar(surface)
         self._draw_canvas(surface)
         self._draw_side_panel(surface)
+        self._draw_toolbar(surface)
         return surface
 
     def save_screenshot(self, path: Path) -> Path:
@@ -287,7 +380,7 @@ class PaintApplication:
         for name, rect in self._tool_rects.items():
             selected = name == self.selected_tool or (
                 name == "refs" and self.reference_board_open
-            )
+            ) or name == self.shape_mode
             pygame.draw.rect(surface, PANEL_LIGHT if selected else PANEL, rect, border_radius=7)
             pygame.draw.rect(
                 surface,
@@ -316,7 +409,23 @@ class PaintApplication:
         panel = pygame.Rect(804, 64, 416, 672)
         pygame.draw.rect(surface, PANEL, panel, border_radius=10)
         pygame.draw.rect(surface, BUTTON_BORDER, panel, width=2, border_radius=10)
-        self._blit_text(surface, "PALETTE", (824, 148), self._font, TEXT)
+        layer_labels = {
+            "layer_prev": "<",
+            "layer_add": "+",
+            "layer_remove": "−",
+            "layer_next": ">",
+        }
+        for name, rect in self._layer_rects.items():
+            pygame.draw.rect(surface, PANEL_LIGHT, rect, border_radius=5)
+            pygame.draw.rect(surface, BUTTON_BORDER, rect, width=2, border_radius=5)
+            label = self._small.render(layer_labels[name], True, TEXT)
+            surface.blit(label, label.get_rect(center=rect.center))
+        layer_status = (
+            f"LAYER {self.model.active_layer + 1}/{len(self.model.layer_names)} "
+            f"{self.model.layer_names[self.model.active_layer]}"
+        )
+        self._blit_text(surface, layer_status, (1022, 132), self._tiny, MUTED)
+        self._blit_text(surface, "PALETTE", (824, 158), self._font, TEXT)
         for name, rect in self._palette_rects.items():
             selected = name == self.selected_colour
             pygame.draw.rect(surface, PALETTE[name], rect, border_radius=6)
@@ -331,6 +440,30 @@ class PaintApplication:
             pygame.draw.rect(surface, PALETTE_MARKERS[name], marker)
             label = self._tiny.render(name.upper(), True, TEXT)
             surface.blit(label, (rect.left, rect.bottom + 5))
+
+        custom = self._custom_colour_rect
+        pygame.draw.rect(surface, self.custom_colour, custom, border_radius=5)
+        pygame.draw.rect(
+            surface,
+            SELECTED if self.selected_colour == "custom" else BUTTON_BORDER,
+            custom,
+            width=3,
+            border_radius=5,
+        )
+        status = (
+            f"{self.shape_mode.upper()}  •  {self.brush_size}px  •  "
+            f"XY {self.magnifier_point}"
+        )
+        self._blit_text(surface, status, (912, 315), self._tiny, MUTED)
+        self._draw_magnifier(surface)
+        for index, rect in enumerate(self._recent_colour_rects):
+            colour = (
+                self.recent_colours[index]
+                if index < len(self.recent_colours)
+                else PANEL_LIGHT
+            )
+            pygame.draw.rect(surface, colour, rect, border_radius=2)
+            pygame.draw.rect(surface, BUTTON_BORDER, rect, width=1, border_radius=2)
 
         if self.review_findings:
             self._draw_review_panel(surface)
@@ -352,7 +485,8 @@ class PaintApplication:
 
         pygame.draw.line(surface, BUTTON_BORDER, (824, 651), (1200, 651), 1)
         counters = (
-            f"ACTIONS {self.drawing_actions}/{self.action_budget}   "
+            f"ACTIONS {self.drawing_actions}  MIN {self.minimum_actions}  "
+            f"TARGET {self.target_actions}  MAX {self.action_budget}   "
             f"REVIEWS {self.review_checkpoints}/{self.review_budget}"
         )
         revision_counters = (
@@ -392,6 +526,39 @@ class PaintApplication:
             number = self._small.render(str(index), True, BACKGROUND)
             overlay.blit(number, number.get_rect(center=badge.center))
         surface.blit(overlay, CANVAS_ORIGIN)
+
+    def _draw_magnifier(self, surface: pygame.Surface) -> None:
+        x, y = self.magnifier_point
+        radius = 12
+        crop = self.model.image.crop(
+            (
+                max(0, x - radius),
+                max(0, y - radius),
+                min(self.model.width, x + radius),
+                min(self.model.height, y + radius),
+            )
+        )
+        if crop.width < 1 or crop.height < 1:
+            return
+        raw = pygame.image.fromstring(crop.tobytes(), crop.size, "RGB")
+        preview = pygame.transform.scale(raw, (72, 36))
+        rect = pygame.Rect(1128, 304, 76, 40)
+        pygame.draw.rect(surface, BUTTON_BORDER, rect, border_radius=4)
+        surface.blit(preview, (rect.x + 2, rect.y + 2))
+        pygame.draw.line(
+            surface,
+            SELECTED,
+            (rect.centerx - 5, rect.centery),
+            (rect.centerx + 5, rect.centery),
+            1,
+        )
+        pygame.draw.line(
+            surface,
+            SELECTED,
+            (rect.centerx, rect.centery - 5),
+            (rect.centerx, rect.centery + 5),
+            1,
+        )
 
     def _draw_review_panel(self, surface: pygame.Surface) -> None:
         y = 356
@@ -583,6 +750,9 @@ class PaintApplication:
             "prompt": self.prompt,
             "seed": self.seed,
             "action_budget": self.action_budget,
+            "minimum_actions": self.minimum_actions,
+            "target_actions": self.target_actions,
+            "detail_level": self.detail_level,
             "review_budget": self.review_budget,
             "revision_budget": self.revision_budget,
             "drawing_actions": self.drawing_actions,
@@ -591,6 +761,10 @@ class PaintApplication:
             "selected_tool": self.selected_tool,
             "selected_colour": self.selected_colour,
             "brush_size": self.brush_size,
+            "shape_mode": self.shape_mode,
+            "custom_colour": list(self.custom_colour),
+            "recent_colours": [list(colour) for colour in self.recent_colours],
+            "magnifier_point": list(self.magnifier_point),
             "summary": asdict(self.summary),
             "references": [reference.to_dict() for reference in self.references],
             "reference_board_open": self.reference_board_open,
@@ -607,6 +781,9 @@ class PaintApplication:
             prompt=payload["prompt"],
             seed=int(payload["seed"]),
             action_budget=int(payload["action_budget"]),
+            minimum_actions=int(payload.get("minimum_actions", 0)),
+            target_actions=int(payload.get("target_actions", payload["action_budget"])),
+            detail_level=str(payload.get("detail_level", "standard")),
             review_budget=int(payload["review_budget"]),
             references=tuple(
                 ReferenceCard.from_dict(value)
@@ -620,6 +797,13 @@ class PaintApplication:
         app.selected_tool = payload["selected_tool"]
         app.selected_colour = payload["selected_colour"]
         app.brush_size = int(payload["brush_size"])
+        app.shape_mode = str(payload.get("shape_mode", "outline"))
+        app.custom_colour = tuple(payload.get("custom_colour", (18, 23, 35)))  # type: ignore[arg-type]
+        app.recent_colours = [
+            tuple(colour)  # type: ignore[arg-type]
+            for colour in payload.get("recent_colours", [])  # type: ignore[union-attr]
+        ]
+        app.magnifier_point = tuple(payload.get("magnifier_point", (380, 300)))  # type: ignore[arg-type]
         app.summary = VisibleSummary(**payload["summary"])
         app.reference_board_open = bool(payload.get("reference_board_open", False))
         app.review_findings = tuple(

@@ -16,6 +16,7 @@ from .constants import CANVAS_ORIGIN
 from .references import ReferenceCard
 from .recording import encode_recordings, save_frame, save_png
 from .review import ReviewFinding
+from .quality import BudgetPolicy, resolve_budget_policy
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class DecisionSummary:
     selected_tool: str
     intended_action: str
     visual_assessment: str
+    pass_name: str = "construction"
+    detail_key: str = "subject"
 
 
 class PaintRun:
@@ -44,16 +47,32 @@ class PaintRun:
         review_budget: int = 3,
         references: tuple[ReferenceCard, ...] = (),
         variant_index: int = 0,
-        revision_budget: int = 3,
+        revision_budget: int | None = None,
+        min_actions: int | None = None,
+        target_actions: int | None = None,
+        max_actions: int | None = None,
+        detail_level: str = "standard",
     ) -> None:
-        validate_budgets(action_budget, review_budget, revision_budget)
+        policy = resolve_budget_policy(
+            action_budget=action_budget,
+            min_actions=min_actions,
+            target_actions=target_actions,
+            max_actions=max_actions,
+            review_budget=review_budget,
+            revision_budget=revision_budget,
+            detail_level=detail_level,
+        )
         self.run_dir = run_dir
         self.prompt = prompt
         self.seed = seed
         self.decision_source = decision_source
-        self.action_budget = action_budget
-        self.review_budget = review_budget
-        self.revision_budget = revision_budget
+        self.policy = policy
+        self.action_budget = policy.maximum_actions
+        self.minimum_actions = policy.minimum_actions
+        self.target_actions = policy.target_actions
+        self.review_budget = policy.review_checkpoints
+        self.revision_budget = policy.revision_actions
+        self.detail_level = policy.detail_level
         self.variant_index = variant_index
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.observation_dir = self.run_dir / "screenshots"
@@ -65,10 +84,13 @@ class PaintRun:
             output_path=self.output_path,
             prompt=prompt,
             seed=seed,
-            action_budget=action_budget,
-            review_budget=review_budget,
+            action_budget=self.action_budget,
+            review_budget=self.review_budget,
             references=references,
-            revision_budget=revision_budget,
+            revision_budget=self.revision_budget,
+            minimum_actions=self.minimum_actions,
+            target_actions=self.target_actions,
+            detail_level=self.detail_level,
         )
         self._write_static_metadata()
         self.capture("initial")
@@ -87,6 +109,10 @@ class PaintRun:
                     else "structured_canvas_state"
                 ),
                 "action_budget": self.action_budget,
+                "minimum_actions": self.minimum_actions,
+                "target_actions": self.target_actions,
+                "detail_level": self.detail_level,
+                "budget_policy": self.policy.to_dict(),
                 "review_budget": self.review_budget,
                 "revision_budget": self.revision_budget,
                 "reference_count": len(self.app.references),
@@ -103,16 +129,22 @@ class PaintRun:
         self,
         action: VisibleAction,
         summary: DecisionSummary,
+        *,
+        is_revision: bool | None = None,
     ) -> dict[str, Any]:
         consumes_budget = self._would_consume_budget(action)
-        is_revision = (
-            consumes_budget
-            and self.app.review_checkpoints >= self.review_budget
-        )
+        if is_revision is None:
+            is_revision = self.app.review_checkpoints >= self.review_budget
+        is_revision = consumes_budget and is_revision
         if consumes_budget and self.app.drawing_actions >= self.action_budget:
             raise RuntimeError("drawing action budget exhausted")
         if is_revision and self.app.revision_actions >= self.revision_budget:
             raise RuntimeError("revision action budget exhausted")
+        if (
+            action.kind == "click"
+            and self.app._tool_rects["save"].collidepoint(action.start)
+        ):
+            self.assert_save_ready()
         self.app.set_review_findings(())
         self.app.set_summary(
             goal=summary.goal,
@@ -139,6 +171,9 @@ class PaintRun:
             "drawing_actions": self.app.drawing_actions,
             "review_checkpoints": self.app.review_checkpoints,
             "revision_actions": self.app.revision_actions,
+            "is_revision": is_revision,
+            "pass_name": summary.pass_name,
+            "detail_key": summary.detail_key,
         }
         self.events.append(event)
         screenshot = self.capture(f"action_{len(self.events):03d}")
@@ -154,6 +189,9 @@ class PaintRun:
             "reviews": self.app.review_checkpoints,
             "revision_actions": self.app.revision_actions,
             "revision_action_budget": self.revision_budget,
+            "minimum_actions": self.minimum_actions,
+            "target_actions": self.target_actions,
+            "detail_level": self.detail_level,
         }
 
     def review(
@@ -216,6 +254,8 @@ class PaintRun:
         mp4_path = self.run_dir / "recording.mp4"
         encode_recordings(self.frame_dir, gif_path, mp4_path, fps=fps)
         review_report = self._write_review_report(final_screenshot)
+        quality_report = self.run_dir / "quality_gates.json"
+        self._write_json(quality_report, self.quality_gate_status())
         self._flush_log()
         return {
             "final_png": str(self.output_path.resolve()),
@@ -223,6 +263,7 @@ class PaintRun:
             "mp4": str(mp4_path.resolve()),
             "action_log": str((self.run_dir / "actions.json").resolve()),
             "review_report": str(review_report.resolve()),
+            "quality_gates": str(quality_report.resolve()),
         }
 
     def to_payload(self) -> dict[str, Any]:
@@ -232,6 +273,9 @@ class PaintRun:
             "seed": self.seed,
             "decision_source": self.decision_source,
             "action_budget": self.action_budget,
+            "minimum_actions": self.minimum_actions,
+            "target_actions": self.target_actions,
+            "detail_level": self.detail_level,
             "review_budget": self.review_budget,
             "revision_budget": self.revision_budget,
             "variant_index": self.variant_index,
@@ -248,8 +292,19 @@ class PaintRun:
         run.seed = int(payload["seed"])
         run.decision_source = payload["decision_source"]
         run.action_budget = int(payload["action_budget"])
+        run.minimum_actions = int(payload.get("minimum_actions", 0))
+        run.target_actions = int(payload.get("target_actions", run.action_budget))
+        run.detail_level = str(payload.get("detail_level", "standard"))
         run.review_budget = int(payload["review_budget"])
         run.revision_budget = int(payload.get("revision_budget", 3))
+        run.policy = resolve_budget_policy(
+            action_budget=run.action_budget,
+            min_actions=run.minimum_actions,
+            target_actions=run.target_actions,
+            review_budget=run.review_budget,
+            revision_budget=run.revision_budget,
+            detail_level=run.detail_level,
+        )
         run.variant_index = int(payload.get("variant_index", 0))
         run.observation_dir = run.run_dir / "screenshots"
         run.frame_dir = run.run_dir / "frames"
@@ -258,6 +313,72 @@ class PaintRun:
         run.frame_index = int(payload["frame_index"])
         run.app = PaintApplication.from_payload(payload["app"])
         return run
+
+    def quality_gate_status(self) -> dict[str, object]:
+        completed_passes = {
+            str(event.get("pass_name") or event.get("summary", {}).get("pass_name", ""))
+            for event in self.events
+            if event.get("type") in {"ui_action", "structured_action"}
+            and (
+                event.get("result", {}).get("drawing_applied")
+                or event.get("type") == "structured_action"
+            )
+        }
+        missing_passes = [
+            name for name in self.policy.required_passes if name not in completed_passes
+        ]
+        latest_high_sequence = max(
+            (
+                int(event["sequence"])
+                for event in self.events
+                if event.get("type") == "review"
+                and any(
+                    finding.get("priority") == "high"
+                    and float(finding.get("confidence", 0)) >= 0.6
+                    for finding in event.get("findings", [])
+                )
+            ),
+            default=-1,
+        )
+        has_later_revision = any(
+            int(event.get("sequence", -1)) > latest_high_sequence
+            and bool(event.get("is_revision"))
+            for event in self.events
+        )
+        unresolved_high = latest_high_sequence >= 0 and not has_later_revision
+        reference_shortfall = max(
+            0,
+            self.policy.reference_minimum - len(self.app.references),
+        )
+        checks = {
+            "minimum_actions": self.app.drawing_actions >= self.minimum_actions,
+            "reviews_complete": self.app.review_checkpoints >= self.review_budget,
+            "detail_passes_complete": not missing_passes,
+            "high_findings_addressed": not unresolved_high,
+            "references_complete": reference_shortfall == 0,
+        }
+        return {
+            "ready": all(checks.values()),
+            "checks": checks,
+            "drawing_actions": self.app.drawing_actions,
+            "minimum_actions": self.minimum_actions,
+            "target_actions": self.target_actions,
+            "maximum_actions": self.action_budget,
+            "missing_passes": missing_passes,
+            "reference_shortfall": reference_shortfall,
+            "unresolved_high_finding": unresolved_high,
+        }
+
+    def assert_save_ready(self) -> None:
+        status = self.quality_gate_status()
+        if status["ready"]:
+            return
+        failures = [
+            name.replace("_", " ")
+            for name, passed in status["checks"].items()  # type: ignore[union-attr]
+            if not passed
+        ]
+        raise RuntimeError("save quality gate blocked: " + ", ".join(failures))
 
     def _write_review_report(self, final_screenshot: Path | None = None) -> Path:
         path = self.run_dir / "review_report.md"
@@ -307,13 +428,16 @@ class PaintRun:
         revisions = [
             event
             for event in self.events
-            if event.get("sequence", -1) > last_review_sequence
-            and (
-                (
-                    event.get("type") == "ui_action"
-                    and event.get("result", {}).get("drawing_applied")
+            if event.get("is_revision")
+            or (
+                event.get("sequence", -1) > last_review_sequence
+                and (
+                    (
+                        event.get("type") == "ui_action"
+                        and event.get("result", {}).get("drawing_applied")
+                    )
+                    or event.get("type") == "structured_action"
                 )
-                or event.get("type") == "structured_action"
             )
         ]
         final_findings = reviews[-1].get("findings", []) if reviews else []
@@ -337,7 +461,7 @@ class PaintRun:
         )
         lines.extend(
             [
-                "## Revision pass",
+                "## Checkpoint correction passes",
                 "",
                 f"**Revision actions:** {self.app.revision_actions}/{self.revision_budget}",
                 "",
@@ -367,7 +491,7 @@ class PaintRun:
                     f"- {summary.get('intended_action', 'Visible revision action')}{suffix}"
                 )
         else:
-            lines.append("- No drawing revision was applied after the final checkpoint.")
+            lines.append("- No drawing correction was applied at any checkpoint.")
         deferred = [
             finding
             for finding in final_findings

@@ -30,12 +30,21 @@ def main() -> int:
     )
     parser.add_argument("--candidates", type=int, default=3)
     parser.add_argument(
-        "--action-budget", "--actions", dest="action_budget", type=int, default=100
+        "--action-budget", "--actions", "--max-actions",
+        dest="action_budget", type=int, default=100
+    )
+    parser.add_argument("--min-actions", type=int, default=35)
+    parser.add_argument("--target-actions", type=int, default=70)
+    parser.add_argument(
+        "--detail-level",
+        choices=("draft", "standard", "high", "ultra"),
+        default="standard",
     )
     parser.add_argument(
         "--review-budget", "--revisions", dest="review_budget", type=int, default=3
     )
-    parser.add_argument("--revision-actions", dest="revision_budget", type=int, default=3)
+    parser.add_argument("--revision-actions", dest="revision_budget", type=int, default=10)
+    parser.add_argument("--finalists", type=int, default=2)
     parser.add_argument("--references", type=Path)
     arguments = parser.parse_args()
     result = run_variant_tournament(
@@ -47,6 +56,10 @@ def main() -> int:
         review_budget=arguments.review_budget,
         reference_manifest=arguments.references,
         revision_budget=arguments.revision_budget,
+        min_actions=arguments.min_actions,
+        target_actions=arguments.target_actions,
+        detail_level=arguments.detail_level,
+        finalist_count=arguments.finalists,
     )
     print(json.dumps(result, indent=2))
     return 0

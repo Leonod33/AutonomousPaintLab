@@ -23,12 +23,20 @@ def build_parser() -> argparse.ArgumentParser:
     reset.add_argument("--prompt", required=True)
     reset.add_argument("--seed", type=int, default=0)
     reset.add_argument(
-        "--action-budget", "--actions", dest="action_budget", type=int, default=100
+        "--action-budget", "--actions", "--max-actions",
+        dest="action_budget", type=int, default=100
+    )
+    reset.add_argument("--min-actions", type=int)
+    reset.add_argument("--target-actions", type=int)
+    reset.add_argument(
+        "--detail-level",
+        choices=("draft", "standard", "high", "ultra"),
+        default="standard",
     )
     reset.add_argument(
         "--review-budget", "--revisions", dest="review_budget", type=int, default=3
     )
-    reset.add_argument("--revision-actions", dest="revision_budget", type=int, default=3)
+    reset.add_argument("--revision-actions", dest="revision_budget", type=int)
     reset.add_argument(
         "--references",
         type=Path,
@@ -45,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
             action.add_argument("x2", type=int)
             action.add_argument("y2", type=int)
         _add_summary_arguments(action)
+        action.add_argument(
+            "--revision",
+            action="store_true",
+            help="Count this canvas change as a checkpoint correction.",
+        )
 
     review = subparsers.add_parser("review")
     review.add_argument("--assessment", required=True)
@@ -78,6 +91,9 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             review_budget=arguments.review_budget,
             references=load_reference_manifest(arguments.references),
             revision_budget=arguments.revision_budget,
+            min_actions=arguments.min_actions,
+            target_actions=arguments.target_actions,
+            detail_level=arguments.detail_level,
         )
         session.app.set_summary(
             phase="MODEL-VISION SCREENSHOT INTERFACE",
@@ -106,7 +122,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             (arguments.x1, arguments.y1),
             (arguments.x2, arguments.y2) if arguments.command == "drag" else None,
         )
-        result = session.execute(action, summary)
+        result = session.execute(
+            action,
+            summary,
+            is_revision=True if arguments.revision else None,
+        )
         _save_state(arguments.state_file, session)
         return {
             "decision_source": "model_vision",
@@ -137,12 +157,16 @@ def _observation(session: PaintRun, screenshot: Path) -> dict[str, Any]:
         "screenshot_path": str(screenshot.resolve()),
         "drawing_actions": session.app.drawing_actions,
         "drawing_action_budget": session.action_budget,
+        "minimum_actions": session.minimum_actions,
+        "target_actions": session.target_actions,
+        "detail_level": session.detail_level,
         "reviews": session.app.review_checkpoints,
         "review_budget": session.review_budget,
         "revision_actions": session.app.revision_actions,
         "revision_action_budget": session.revision_budget,
         "reference_count": len(session.app.references),
         "visible_review_findings": len(session.app.review_findings),
+        "quality_gates": session.quality_gate_status(),
     }
 
 

@@ -4,15 +4,17 @@ A small Python/PyGame experiment in which an agent makes reproducible artwork
 through a custom Paint-like interface.
 
 The project keeps the canvas model separate from PyGame rendering and provides
-six progressively stricter stages:
+seven progressively stricter stages:
 
 1. Human-operated Paint application.
 2. Structured-state control for verifying drawing primitives.
 3. Deterministic screenshot-only control through visible clicks and drags.
-4. Adjustable visual checkpoints with a separately bounded revision pass.
-5. GIF/MP4 recording with concise, visible decision summaries.
-6. Blind variant tournaments that compare several screenshot-only candidates
-   with a prompt-specific visible rubric.
+4. Coarse-to-fine composition, construction, form, material, lighting, texture,
+   and focal-finish passes with a visible detail ledger.
+5. Visual checkpoints with bounded corrections immediately after each review.
+6. GIF/MP4 recording with concise, visible decision summaries and quality gates.
+7. Two-stage blind tournaments that qualify thumbnails, refine finalists, and
+   compare them with a detail-sensitive visible rubric.
 
 The screenshot interface never returns canvas state. Its agent input is the
 complete application PNG, and its only drawing outputs are visible UI actions.
@@ -37,33 +39,39 @@ python scripts/run_screenshot_agent.py --prompt "a cheerful robot tending square
 python scripts/screenshot_cli.py --help
 ```
 
-## Adjustable detail and revision limits
+## Detail profiles and purposeful action budgets
 
-Every autonomous runner accepts the same three controls:
+Every autonomous runner accepts a floor, planning target, and hard ceiling:
 
-- `--actions` (or `--action-budget`) caps all drawing actions.
+- `--min-actions` prevents a nominally detailed run from stopping as a sketch.
+- `--target-actions` is allocated across named coarse-to-fine passes.
+- `--max-actions` (also `--actions` or `--action-budget`) remains a hard cap.
+- `--detail-level` selects `draft`, `standard`, `high`, or `ultra` gates.
 - `--revisions` (or `--review-budget`) sets the number of visual review
   checkpoints.
-- `--revision-actions` caps visible drawing corrections after the final
-  checkpoint.
+- `--revision-actions` caps visible drawing corrections distributed after
+  checkpoints.
 
-For example, a more detailed three-candidate tournament can reserve 180 drawing
-actions, five reviews, and eight final corrections for each candidate:
+For example, this high-detail guinea-pig tournament requires at least 80
+purposeful marks, plans for 140, never exceeds 200, and reserves 24 checkpoint
+corrections:
 
 ```bash
 python scripts/run_tournament.py \
-  --prompt "a cheerful robot tending square flowers" \
+  --prompt "A cute guinea pig resting in a 'cuddle cup'" \
   --seed 57 --candidates 3 \
-  --actions 180 --revisions 5 --revision-actions 8 \
-  --run-dir runs/detailed-robot-tournament
+  --detail-level high \
+  --min-actions 80 --target-actions 140 --max-actions 200 \
+  --revisions 5 --revision-actions 24 --finalists 2 \
+  --references runs/guinea-pig-references/references.json \
+  --run-dir runs/guinea-pig-tournament
 ```
 
-The defaults remain 100 actions, three checkpoints, and three correction
-actions. These are ceilings rather than quotas: a seeded starter plan may finish
-early, while a screenshot-driven model can use the additional headroom for a
-more detailed picture. The chosen values appear in the application, metadata,
-action log, review report, and tournament manifest. Set `--revision-actions 0`
-to review without allowing a correction pass.
+The standard profile plans 70 actions inside a 100-action ceiling. The high
+profile defaults to 80/140/200 and requires two attributed references; ultra
+uses 140/220/320 and three. Save is blocked until the minimum, configured
+reviews, required passes, reference rule, and high-priority correction checks
+all pass. `quality_gates.json` records every check.
 
 Prepare an attributed reference:
 
@@ -83,7 +91,7 @@ python scripts/run_screenshot_agent.py \
 
 Generated runs contain the prompt, metadata, action log, complete-application
 screenshots, numbered recording frames, final canvas PNG, GIF, MP4, attributed
-references, and a human-readable visual review report.
+references, a human-readable visual review report, and the quality-gate report.
 
 Run a three-candidate tournament:
 
@@ -94,12 +102,24 @@ python scripts/run_tournament.py \
   --run-dir runs/robot-tournament
 ```
 
-Each candidate receives isolated action, review-checkpoint, and correction
-budgets. The tournament
-judge sees only the final complete-application screenshots, brief, and visible
-rubric—not seeds, canvas state, logs, or review reports. It preserves every
-candidate and produces `tournament.json`, `tournament_report.md`,
+Each candidate receives an explicit diversity contract covering pose,
+composition, lighting, and rendering. A draft qualification round spends
+25–40-ish actions on every concept; only the selected finalists are reproduced
+at the full detail target. The judge sees only final complete-application
+screenshots, brief, and visible rubric—not seeds, canvas state, logs, or review
+reports. The rubric weights prompt fidelity and representation accuracy at 20%
+each; composition, depth/lighting, and material rendering at 15% each; fine
+detail at 10%; and originality at 5%. The run preserves every qualifier and
+finalist and produces `tournament.json`, `tournament_report.md`,
 `tournament_montage.png`, `winner.png`, and `winner_full_app.png`.
+
+## Paint v2 controls
+
+The visible application now includes adjustable 1–64 px strokes, outlined,
+filled, and combined shape modes, eyedropper sampling, custom/recent colour
+state, an expanded natural palette, a cursor-coordinate magnifier, and a visible
+layer stack. The canvas model also supports named layers, polygons, quadratic
+Bézier curves, gradients, and smudging while preserving undo and serialization.
 
 Example outputs:
 
