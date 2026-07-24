@@ -1,8 +1,11 @@
+import json
 from pathlib import Path
 import tempfile
 import unittest
 
+from autonomous_paint.constants import CANVAS_ORIGIN
 from autonomous_paint.screenshot_cli import build_parser, run
+from autonomous_paint.session import PaintRun
 
 
 class ScreenshotCliTests(unittest.TestCase):
@@ -69,6 +72,55 @@ class ScreenshotCliTests(unittest.TestCase):
             reviewed = run(review_args)
             self.assertEqual(1, reviewed["visible_review_findings"])
             self.assertTrue(Path(reviewed["screenshot_path"]).exists())
+
+    def test_visible_action_accepts_detail_pass_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            state = base / "session.json"
+            run(
+                build_parser().parse_args(
+                    [
+                        "--state-file",
+                        str(state),
+                        "reset",
+                        "--run-dir",
+                        str(base / "run"),
+                        "--prompt",
+                        "a lighthouse",
+                        "--min-actions",
+                        "0",
+                    ]
+                )
+            )
+            run(
+                build_parser().parse_args(
+                    [
+                        "--state-file",
+                        str(state),
+                        "click",
+                        str(CANVAS_ORIGIN[0] + 20),
+                        str(CANVAS_ORIGIN[1] + 20),
+                        "--goal",
+                        "Place focal detail.",
+                        "--selected-tool",
+                        "brush",
+                        "--intended-action",
+                        "Add one visible mark.",
+                        "--visual-assessment",
+                        "The focal area is empty.",
+                        "--pass-name",
+                        "focal_finish",
+                        "--detail-key",
+                        "beacon",
+                    ]
+                )
+            )
+            restored = PaintRun.from_payload(
+                json.loads(state.read_text(encoding="utf-8"))
+            )
+            event = restored.events[-1]
+            self.assertEqual("focal_finish", event["pass_name"])
+            self.assertEqual("beacon", event["detail_key"])
 
 
 if __name__ == "__main__":
